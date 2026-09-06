@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PCB Spec Inspector Mockup</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 flex h-screen overflow-hidden font-sans">
+
+  <div class="flex-1 flex flex-col border-r border-slate-800">
+    <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+      <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500" />
+      <span id="status" class="text-xs text-slate-400">Upload a PCB fabrication zip...</span>
+    </div>
+    <div id="viewer" class="flex-1 overflow-auto p-4 flex justify-center bg-slate-900">
+      <canvas id="pdfCanvas" class="shadow-2xl max-w-full h-auto rounded border border-slate-700"></canvas>
+    </div>
+  </div>
+
+  <div class="w-96 p-6 flex flex-col bg-slate-950">
+    <h2 class="text-lg font-bold mb-4 text-blue-400">Spec Inspector</h2>
+    
+    <label class="text-xs text-slate-400 mb-1">API Key (stored in session only)</label>
+    <input type="password" id="apiKey" placeholder="AI API Key" class="p-2 mb-4 bg-slate-900 border border-slate-700 rounded text-sm text-white" />
+
+    <button id="scanBtn" class="w-full py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium text-sm transition">
+      Extract Board Thickness
+    </button>
+
+    <div class="mt-6 border-t border-slate-800 pt-4 space-y-4">
+      <div>
+        <span class="text-xs text-slate-500 uppercase tracking-wider">Suggested Value</span>
+        <div id="resultValue" class="text-xl font-mono text-emerald-400 font-semibold mt-1">--</div>
+      </div>
+      <div>
+        <span class="text-xs text-slate-500 uppercase tracking-wider">Verbatim Reference Snippet</span>
+        <blockquote id="resultSnippet" class="mt-1 p-3 bg-slate-900 border-l-2 border-emerald-400 text-xs italic text-slate-300">
+          No scan performed yet.
+        </blockquote>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    let targetImageBase64 = null;
+
+    // 1. Handle Zip and Extract Fab Drawing
+    document.getElementById('zipInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      document.getElementById('status').innerText = 'Unpacking zip...';
+      const zip = await JSZip.loadAsync(file);
+
+      // Find the fabrication drawing PDF
+      const pdfEntry = Object.values(zip.files).find(f => 
+        f.name.toLowerCase().endsWith('.pdf') && 
+        (f.name.toLowerCase().includes('fab') || f.name.toLowerCase().includes('drawing') || f.name.toLowerCase().includes('dwg'))
+      ) || Object.values(zip.files).find(f => f.name.toLowerCase().endsWith('.pdf'));
+
+      if (!pdfEntry) {
+        document.getElementById('status').innerText = 'No PDF found in zip.';
+        return;
+      }
+
+      document.getElementById('status').innerText = `Rendering ${pdfEntry.name}...`;
+      const pdfData = await pdfEntry.async('arraybuffer');
+      const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+      const page = await pdf.getPage(1); // Inspect first page
+
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.getElementById('pdfCanvas');
+      const context = canvas.getContext('2d');
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      await page.render({ canvasContext: context, viewport }).promise;
+      targetImageBase64 = canvas.toDataURL('image/jpeg').split(',')[1];
+      document.getElementById('status').innerText = `Loaded: ${pdfEntry.name}`;
+    });
+
+    // 2. Multimodal LLM Extraction (Vision-based)
+    document.getElementById('scanBtn').addEventListener('click', async () => {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      if (!apiKey || !targetImageBase64) {
+        alert('Please provide an API key and upload a zip containing a PDF drawing.');
+        return;
+      }
+
+      document.getElementById('resultValue').innerText = 'Analyzing image...';
+      document.getElementById('resultSnippet').innerText = 'Reading fabrication notes...';
+
+      const prompt = `You are a PCB manufacturing engineer. Analyze this fabrication drawing.
+Extract the OVERALL FINISHED BOARD THICKNESS (including tolerance).
+Do NOT return copper foil weight (e.g. 1oz) or internal dielectric layer thicknesses.
+Return pure JSON with keys: "value" and "snippet" (exact verbatim text quote from notes).`;
+
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: 'image/jpeg', data: targetImageBase64 } }
+              ]
+            }],
+            generationConfig: { response_mime_type: 'application/json' }
+          })
+        });
+
+        const data = await response.json();
+        const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+        document.getElementById('resultValue').innerText = parsed.value || 'Not found';
+        document.getElementById('resultSnippet').innerText = parsed.snippet || 'No direct reference quote located.';
+      } catch (err) {
+        console.error(err);
+        document.getElementById('resultValue').innerText = 'Error';
+        document.getElementById('resultSnippet').innerText = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

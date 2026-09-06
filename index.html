@@ -24,13 +24,13 @@
 
   <main class="flex-1 flex overflow-hidden">
     
-    <section class="flex-1 flex flex-col items-center justify-center p-8 bg-slate-950/80 border-r border-slate-800 relative">
+    <section class="flex-1 flex flex-col items-center justify-center p-6 bg-slate-950/80 border-r border-slate-800 relative overflow-auto">
       <div id="snippetPlaceholder" class="text-slate-500 text-sm italic">
         Upload a zip file and click "Run Extraction" to generate snippets.
       </div>
       
-      <div id="canvasWrapper" class="hidden flex flex-col items-center max-w-full max-h-full">
-        <canvas id="snippetCanvas" class="shadow-2xl rounded-lg border-2 border-emerald-500/70 bg-white max-h-[75vh] max-w-[90%] object-contain"></canvas>
+      <div id="canvasWrapper" class="hidden flex flex-col items-center max-w-full">
+        <canvas id="snippetCanvas" class="shadow-2xl rounded-lg border-2 border-emerald-500/70 bg-white max-w-[95%] h-auto object-contain"></canvas>
         <p class="text-[11px] text-slate-400 mt-2 italic">Cropped direct from fabrication drawing</p>
       </div>
 
@@ -60,7 +60,7 @@
 
           <div>
             <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Verbatim Reference Quote</span>
-            <blockquote id="specSnippet" class="mt-1 p-3 bg-slate-950 border-l-2 border-emerald-400 text-xs italic text-slate-300 rounded-r">
+            <blockquote id="specSnippet" class="mt-1 p-3 bg-slate-950 border-l-2 border-emerald-400 text-xs italic text-slate-300 rounded-r break-words">
               No scan performed yet.
             </blockquote>
           </div>
@@ -90,7 +90,7 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
-    // 1. Unpack Zip and Render Full PDF Page to Offscreen Canvas
+    // 1. Unpack Zip and Render Full Drawing to Memory
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -113,7 +113,6 @@
       const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
       const page = await pdf.getPage(1);
 
-      // High resolution scale for clear cropped text
       const viewport = page.getViewport({ scale: 2.5 });
       offscreenCanvas.height = viewport.height;
       offscreenCanvas.width = viewport.width;
@@ -199,7 +198,6 @@ Return pure JSON matching this exact structure:
       if (!specList || specList.length === 0) return;
 
       const item = specList[currentIndex];
-      const isNoData = item.value.toLowerCase().includes('no data');
 
       document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
       document.getElementById('specCategory').innerText = item.category || 'SPEC';
@@ -213,7 +211,7 @@ Return pure JSON matching this exact structure:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // 4. Crop Canvas to the Target Coordinate Box
+    // 4. Crop Canvas with Expanded Viewport and Larger Bounding Box
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');
@@ -232,9 +230,9 @@ Return pure JSON matching this exact structure:
       const imgW = offscreenCanvas.width;
       const imgH = offscreenCanvas.height;
 
-      // Generous padding around the detected text for CAM context
-      const padX = 60;
-      const padY = 40;
+      // Expanded contextual padding (horizontal and vertical)
+      const padX = 160;
+      const padY = 70;
 
       const sx = Math.max(0, (xmin / 1000) * imgW - padX);
       const sy = Math.max(0, (ymin / 1000) * imgH - padY);
@@ -247,11 +245,19 @@ Return pure JSON matching this exact structure:
       const ctx = snippetCanvas.getContext('2d');
       ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
 
-      // Draw highlighting rectangle around target callout
-      const boxX = (xmin / 1000) * imgW - sx;
-      const boxY = (ymin / 1000) * imgH - sy;
-      const boxW = ((xmax - xmin) / 1000) * imgW;
-      const boxH = ((ymax - ymin) / 1000) * imgH;
+      // Inflate bounding box dimensions so it surrounds the full callout cleanly
+      const boxPadX = 14;
+      const boxPadY = 10;
+
+      const rawBoxX = (xmin / 1000) * imgW - sx;
+      const rawBoxY = (ymin / 1000) * imgH - sy;
+      const rawBoxW = ((xmax - xmin) / 1000) * imgW;
+      const rawBoxH = ((ymax - ymin) / 1000) * imgH;
+
+      const boxX = Math.max(0, rawBoxX - boxPadX);
+      const boxY = Math.max(0, rawBoxY - boxPadY);
+      const boxW = rawBoxW + boxPadX * 2;
+      const boxH = rawBoxH + boxPadY * 2;
 
       ctx.strokeStyle = '#10b981';
       ctx.lineWidth = 4;
@@ -260,7 +266,7 @@ Return pure JSON matching this exact structure:
       ctx.strokeRect(boxX, boxY, boxW, boxH);
     }
 
-    // 5. Button Listeners
+    // 5. Navigation Listeners
     document.getElementById('prevBtn').addEventListener('click', () => {
       if (currentIndex > 0) {
         currentIndex--;

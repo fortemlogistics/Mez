@@ -2,33 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PCB Multi-Spec Inspector Mockup</title>
+  <title>PCB Spec Inspector - Visual Snippet View</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 flex h-screen overflow-hidden font-sans">
 
-  <!-- Left: PDF Drawing Viewer -->
+  <!-- Left: Visual Inspection / Snippet Viewer -->
   <div class="flex-1 flex flex-col border-r border-slate-800">
     <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
       <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
-      <span id="status" class="text-xs text-slate-400">Upload a PCB fabrication zip...</span>
+      <div class="flex items-center gap-3">
+        <span id="activeSpecTitle" class="text-xs font-semibold text-emerald-400">Full Drawing View</span>
+        <button id="toggleViewBtn" class="hidden text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700 text-slate-300">
+          Reset to Full Sheet
+        </button>
+      </div>
     </div>
-    <div id="viewer" class="flex-1 overflow-auto p-4 flex justify-center bg-slate-900">
-      <canvas id="pdfCanvas" class="shadow-2xl max-w-full h-auto rounded border border-slate-700"></canvas>
+    <div id="viewer" class="flex-1 overflow-auto p-6 flex items-center justify-center bg-slate-950/60">
+      <!-- Full Page Source Canvas (Hidden when viewing cropped snippet) -->
+      <canvas id="pdfCanvas" class="shadow-2xl max-w-full h-auto rounded border border-slate-800"></canvas>
+      <!-- Visual Snippet Crop Canvas -->
+      <canvas id="snippetCanvas" class="hidden shadow-2xl rounded border-2 border-emerald-500/60 bg-white"></canvas>
     </div>
   </div>
 
-  <!-- Right: Categorized Specs Inspector Panel -->
+  <!-- Right: Categorized Specs Panel -->
   <div class="w-[520px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
-    <h2 class="text-lg font-bold mb-4 text-blue-400">PCB Spec Inspector</h2>
+    <h2 class="text-lg font-bold mb-1 text-blue-400">PCB Spec Inspector</h2>
+    <p class="text-[11px] text-slate-400 mb-4">Click any extracted card below to crop into its visual reference callout.</p>
 
     <button id="scanBtn" class="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded font-medium text-sm transition shadow-lg shadow-blue-900/30">
       Extract All PCB Specs
     </button>
 
-    <div id="specsContainer" class="mt-6 border-t border-slate-800 pt-4 space-y-6">
+    <div id="specsContainer" class="mt-6 border-t border-slate-800 pt-4 space-y-4">
       <div class="text-xs text-slate-500 italic">Upload a zip and click extract to scan specifications.</div>
     </div>
   </div>
@@ -36,47 +45,47 @@
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     let targetImageBase64 = null;
+    let fullPageCanvas = document.getElementById('pdfCanvas');
+    let snippetCanvas = document.getElementById('snippetCanvas');
 
     const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
-    // 1. Unpack Zip & Render PDF Page 1
+    // 1. Unpack Zip & Render PDF
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
-      document.getElementById('status').innerText = 'Unpacking zip...';
       const zip = await JSZip.loadAsync(file);
-
       const pdfEntry = Object.values(zip.files).find(f => 
         f.name.toLowerCase().endsWith('.pdf') && 
         (f.name.toLowerCase().includes('fab') || f.name.toLowerCase().includes('drawing') || f.name.toLowerCase().includes('dwg'))
       ) || Object.values(zip.files).find(f => f.name.toLowerCase().endsWith('.pdf'));
 
       if (!pdfEntry) {
-        document.getElementById('status').innerText = 'No PDF found in zip.';
+        alert('No PDF fabrication drawing found in archive.');
         return;
       }
 
-      document.getElementById('status').innerText = `Rendering ${pdfEntry.name}...`;
       const pdfData = await pdfEntry.async('arraybuffer');
       const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
       const page = await pdf.getPage(1);
 
-      const viewport = page.getViewport({ scale: 2.0 });
-      const canvas = document.getElementById('pdfCanvas');
-      const context = canvas.getContext('2d');
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
+      // Render at 2.5x for sharp snippet crops
+      const viewport = page.getViewport({ scale: 2.5 });
+      fullPageCanvas.height = viewport.height;
+      fullPageCanvas.width = viewport.width;
 
+      const context = fullPageCanvas.getContext('2d');
       await page.render({ canvasContext: context, viewport }).promise;
-      targetImageBase64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-      document.getElementById('status').innerText = `Loaded: ${pdfEntry.name}`;
+
+      targetImageBase64 = fullPageCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+      showFullDrawing();
     });
 
-    // 2. Multimodal LLM Extraction Across All Spec Domains
+    // 2. Multimodal Extraction with Bounding Box Localization
     document.getElementById('scanBtn').addEventListener('click', async () => {
       if (!API_KEY) {
-        alert('API Key not found. Open Console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
+        alert('API Key not found. Open console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
         return;
       }
 
@@ -86,65 +95,42 @@
       }
 
       const container = document.getElementById('specsContainer');
-      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Analyzing notes, layer stackup table, dimensions, and drill chart...</div>';
+      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Scanning drawing and isolating visual snippets...</div>';
 
       const prompt = `You are an expert PCB manufacturing CAM engineer.
-Examine this PCB fabrication print (all notes, drill tables, layer stackup tables, dimensions, and title blocks).
-Extract all parameters into JSON. If a spec is not stated or cannot be determined, set "value" to "No data" and "snippet" to "No data".
-snippets MUST be exact verbatim quotes from the print.
+Examine this PCB fabrication print (notes, drill tables, stackup tables, and title blocks).
+Extract all parameters into JSON. 
+CRITICAL REQUIREMENT: For each found specification, return its bounding box coordinates on the image normalized to 1000: [ymin, xmin, ymax, xmax].
+If not found, set "value" to "No data", "snippet" to "No data", and "box_2d" to null.
 
-Output pure JSON matching this exact structure:
+Output pure JSON with this exact structure:
 {
   "stackup_material": {
-    "part_type": { "value": "e.g. PCB - 2 Layer", "snippet": "..." },
-    "material": { "value": "e.g. FR4, UL94V-2", "snippet": "..." },
-    "core_prepreg": { "value": "e.g. # Cores: 1, # PP Sheets: 0", "snippet": "..." },
-    "copper_thickness": { "value": "e.g. Outer: 1 oz (1.40 mil), Inner: N/A", "snippet": "..." },
-    "board_thickness": { "value": "e.g. 63 mil (1.59 mm)", "snippet": "..." },
-    "board_thickness_tol": { "value": "e.g. +/- 10%", "snippet": "..." },
-    "imbalance_stackup": { "value": "Yes or No", "snippet": "..." },
-    "bow_twist_tol": { "value": "e.g. 1% or No data", "snippet": "..." }
+    "part_type": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "material": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "copper_thickness": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "board_thickness": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "board_thickness_tol": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
   },
   "dimensions_panel": {
-    "dim_unit": { "value": "e.g. X - 1477.0 mil, Y - 1848.0 mil", "snippet": "..." },
-    "panelized": { "value": "e.g. Single Unit or No data", "snippet": "..." },
-    "dim_panel": { "value": "e.g. No data", "snippet": "..." },
-    "rails": { "value": "e.g. No data", "snippet": "..." },
-    "multipanel": { "value": "No", "snippet": "..." },
-    "panel_profile": { "value": "e.g. Routing or No data", "snippet": "..." },
-    "beveling": { "value": "e.g. 30 degrees or No", "snippet": "..." },
-    "x_out_allow": { "value": "e.g. No data", "snippet": "..." }
+    "dim_unit": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "panel_profile": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "beveling": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
   },
   "soldermask_marking": {
-    "silkscreen": { "value": "e.g. White", "snippet": "..." },
-    "soldermask_color": { "value": "e.g. Solder Resist / Non-Specific", "snippet": "..." },
-    "soldermask_finish": { "value": "e.g. Non-Specific", "snippet": "..." },
-    "soldermask_class": { "value": "e.g. Class - T or No data", "snippet": "..." },
-    "soldermask_thck": { "value": "e.g. 0.4 mil", "snippet": "..." },
-    "temp_mask": { "value": "No", "snippet": "..." },
-    "e_test_mark": { "value": "e.g. Test continuity to all solderable pads", "snippet": "..." },
-    "two_d_code": { "value": "No", "snippet": "..." },
-    "date_code_format": { "value": "e.g. No data", "snippet": "..." }
+    "silkscreen": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "soldermask_color": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "soldermask_thck": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
   },
   "holes": {
-    "hole_count": { "value": "e.g. 106 Total", "snippet": "..." },
-    "smallest_hole": { "value": "e.g. 10.0 mil (0.25 mm)", "snippet": "..." },
-    "hole_wall_cu": { "value": "e.g. No data", "snippet": "..." },
-    "th_plugging": { "value": "No", "snippet": "..." },
-    "blind_buried_vias": { "value": "None", "snippet": "..." },
-    "slots": { "value": "None or No data", "snippet": "..." },
-    "backdrill": { "value": "No", "snippet": "..." },
-    "countersink": { "value": "No", "snippet": "..." },
-    "pressfit_holes": { "value": "No", "snippet": "..." }
+    "hole_count": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "smallest_hole": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "blind_buried_vias": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
   },
   "compliance_reporting": {
-    "ipc_class": { "value": "e.g. IPC 6012 Class 2", "snippet": "..." },
-    "rohs": { "value": "e.g. Compliant (Lead-free)", "snippet": "..." },
-    "reach": { "value": "e.g. Compliant", "snippet": "..." },
-    "halogen_free": { "value": "No data", "snippet": "..." },
-    "ul_required": { "value": "e.g. UL94V-2", "snippet": "..." },
-    "fai_ppap": { "value": "No data", "snippet": "..." },
-    "ionic_contamination": { "value": "No data", "snippet": "..." }
+    "ipc_class": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "rohs": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+    "ul_required": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
   }
 }`;
 
@@ -164,33 +150,64 @@ Output pure JSON matching this exact structure:
         });
 
         const data = await response.json();
-
-        if (data.error) throw new Error(`Google API: ${data.error.message || JSON.stringify(data.error)}`);
-        if (!data.candidates || !data.candidates[0].content) throw new Error('Empty response from model.');
-
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
         const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
-        renderCategorizedSpecs(parsed);
-
+        renderInteractiveSpecs(parsed);
       } catch (err) {
         console.error(err);
         container.innerHTML = `<div class="p-3 bg-red-950 border border-red-700 text-red-300 text-xs rounded">${err.message}</div>`;
       }
     });
 
-    function renderCategorizedSpecs(data) {
-      const sectionConfigs = [
+    // 3. Visual Crop Function
+    window.cropToSnippet = function(title, box) {
+      if (!box || box.length !== 4) return;
+
+      const [ymin, xmin, ymax, xmax] = box;
+      const imgW = fullPageCanvas.width;
+      const imgH = fullPageCanvas.height;
+
+      // Convert normalized 0-1000 box to canvas pixel coordinates with 20px padding
+      const pad = 25;
+      const sx = Math.max(0, (xmin / 1000) * imgW - pad);
+      const sy = Math.max(0, (ymin / 1000) * imgH - pad);
+      const sw = Math.min(imgW - sx, ((xmax - xmin) / 1000) * imgW + pad * 2);
+      const sh = Math.min(imgH - sy, ((ymax - ymin) / 1000) * imgH + pad * 2);
+
+      snippetCanvas.width = sw;
+      snippetCanvas.height = sh;
+
+      const ctx = snippetCanvas.getContext('2d');
+      ctx.drawImage(fullPageCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+      fullPageCanvas.classList.add('hidden');
+      snippetCanvas.classList.remove('hidden');
+
+      document.getElementById('activeSpecTitle').innerText = `Snippet: ${title}`;
+      document.getElementById('toggleViewBtn').classList.remove('hidden');
+    };
+
+    function showFullDrawing() {
+      snippetCanvas.classList.add('hidden');
+      fullPageCanvas.classList.remove('hidden');
+      document.getElementById('activeSpecTitle').innerText = 'Full Drawing View';
+      document.getElementById('toggleViewBtn').classList.add('hidden');
+    }
+
+    document.getElementById('toggleViewBtn').addEventListener('click', showFullDrawing);
+
+    // 4. Render Categorized Cards
+    function renderInteractiveSpecs(data) {
+      const sections = [
         {
           title: "Stackup & Material",
           data: data.stackup_material,
           labels: {
             part_type: "Part Type",
             material: "Material",
-            core_prepreg: "Core & Pre-preg",
             copper_thickness: "Cu Thickness",
             board_thickness: "Board Thickness",
-            board_thickness_tol: "Board Thickness Tol.",
-            imbalance_stackup: "Imbalance Stackup",
-            bow_twist_tol: "Bow & Twist Tol."
+            board_thickness_tol: "Board Thickness Tol."
           }
         },
         {
@@ -198,13 +215,8 @@ Output pure JSON matching this exact structure:
           data: data.dimensions_panel,
           labels: {
             dim_unit: "DIM-Unit",
-            panelized: "Panelized",
-            dim_panel: "DIM-Panel",
-            rails: "Rails",
-            multipanel: "Multipanel",
             panel_profile: "Panel Profile",
-            beveling: "Beveling",
-            x_out_allow: "X-Out Allow"
+            beveling: "Beveling"
           }
         },
         {
@@ -213,13 +225,7 @@ Output pure JSON matching this exact structure:
           labels: {
             silkscreen: "Silkscreen",
             soldermask_color: "Solder Mask Color",
-            soldermask_finish: "Solder Mask Finish",
-            soldermask_class: "Solder Mask Class",
-            soldermask_thck: "Solder Mask Thck",
-            temp_mask: "Temp. Mask",
-            e_test_mark: "E-Test Mark",
-            two_d_code: "2D Code",
-            date_code_format: "Date Code Format"
+            soldermask_thck: "Solder Mask Thck"
           }
         },
         {
@@ -228,33 +234,23 @@ Output pure JSON matching this exact structure:
           labels: {
             hole_count: "Hole Count",
             smallest_hole: "Smallest Hole",
-            hole_wall_cu: "Hole Wall Cu",
-            th_plugging: "TH Plugging",
-            blind_buried_vias: "Blind / Buried Vias",
-            slots: "Slots",
-            backdrill: "Backdrill",
-            countersink: "Countersink",
-            pressfit_holes: "Pressfit Holes"
+            blind_buried_vias: "Blind / Buried Vias"
           }
         },
         {
-          title: "Compliance and Reporting",
+          title: "Compliance & Standards",
           data: data.compliance_reporting,
           labels: {
             ipc_class: "IPC Class",
             rohs: "RoHS",
-            reach: "REACH",
-            halogen_free: "Halogen Free",
-            ul_required: "UL Required",
-            fai_ppap: "FAI / PPAP",
-            ionic_contamination: "Ionic Contamination"
+            ul_required: "UL Required"
           }
         }
       ];
 
       let fullHtml = '';
 
-      sectionConfigs.forEach(section => {
+      sections.forEach(section => {
         if (!section.data) return;
 
         fullHtml += `
@@ -264,17 +260,25 @@ Output pure JSON matching this exact structure:
         `;
 
         for (const [key, label] of Object.entries(section.labels)) {
-          const item = section.data[key] || { value: 'No data', snippet: 'No data' };
+          const item = section.data[key] || { value: 'No data', snippet: 'No data', box_2d: null };
+          const hasBox = item.box_2d && item.box_2d.length === 4;
           const isNoData = item.value.toLowerCase().includes('no data');
 
           fullHtml += `
-            <div class="text-xs py-1 border-b border-slate-800/40 last:border-0">
+            <div 
+              class="text-xs py-1.5 px-2 rounded border border-transparent transition ${hasBox ? 'hover:border-emerald-500/60 hover:bg-slate-800/80 cursor-pointer' : ''}" 
+              ${hasBox ? `onclick='cropToSnippet("${label}", ${JSON.stringify(item.box_2d)})'` : ''}
+            >
               <div class="flex justify-between items-baseline gap-2">
-                <span class="text-slate-400 font-medium">${label}</span>
-                <span class="${isNoData ? 'text-slate-500' : 'text-emerald-400 font-semibold'} text-right">${item.value}</span>
+                <span class="text-slate-400 font-medium flex items-center gap-1.5">
+                  ${hasBox ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>' : ''}
+                  ${label}
+                </span>
+                <span class="${isNoData ? 'text-slate-500' : 'text-emerald-400 font-semibold'} text-right font-mono">${item.value}</span>
               </div>
-              <div class="mt-0.5 text-[10px] italic p-1.5 bg-slate-950/80 rounded border-l-2 ${isNoData ? 'border-slate-700 text-slate-500' : 'border-emerald-500 text-slate-300'}">
-                ${item.snippet}
+              <div class="mt-1 text-[10px] italic p-1 bg-slate-950/80 rounded border-l-2 ${isNoData ? 'border-slate-700 text-slate-500' : 'border-emerald-500 text-slate-300'} flex justify-between items-center">
+                <span class="truncate">${item.snippet}</span>
+                ${hasBox ? '<span class="text-[9px] text-emerald-400 font-sans not-italic ml-2 uppercase tracking-tight whitespace-nowrap">View Snippet ↗</span>' : ''}
               </div>
             </div>
           `;

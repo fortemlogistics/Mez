@@ -47,24 +47,17 @@
           <span id="specCategory" class="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">--</span>
         </div>
 
-        <div class="space-y-5">
+        <div class="space-y-6">
           <div>
             <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Parameter</span>
-            <h2 id="specLabel" class="text-lg font-bold text-white mt-0.5">--</h2>
+            <h2 id="specLabel" class="text-lg font-bold text-white mt-1">--</h2>
           </div>
 
           <div>
             <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Suggested Value</span>
-            <div id="specValue" class="text-xl font-mono text-emerald-400 font-semibold mt-1 p-3 bg-slate-950 rounded border border-slate-800">
+            <div id="specValue" class="text-xl font-mono text-emerald-400 font-semibold mt-2 p-4 bg-slate-950 rounded border border-slate-800">
               --
             </div>
-          </div>
-
-          <div>
-            <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Verbatim Reference Quote</span>
-            <blockquote id="specSnippet" class="mt-1 p-3 bg-slate-950 border-l-2 border-emerald-400 text-xs italic text-slate-300 rounded-r break-words">
-              No scan performed yet.
-            </blockquote>
           </div>
         </div>
       </div>
@@ -211,7 +204,6 @@ Return pure JSON matching this exact structure:
       document.getElementById('specCategory').innerText = item.category || 'SPEC';
       document.getElementById('specLabel').innerText = item.label;
       document.getElementById('specValue').innerText = item.value;
-      document.getElementById('specSnippet').innerText = item.snippet;
 
       document.getElementById('prevBtn').disabled = (currentIndex === 0);
       document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);

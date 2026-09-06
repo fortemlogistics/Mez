@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PCB Multi-Spec Inspector Mockup</title>
+  <title>PCB Full Spec Inspector Mockup</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 flex h-screen overflow-hidden font-sans">
 
-  <!-- Left: Drawing Viewer -->
+  <!-- Left: Drawing Canvas Viewer -->
   <div class="flex-1 flex flex-col border-r border-slate-800">
     <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
       <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
@@ -20,9 +20,9 @@
     </div>
   </div>
 
-  <!-- Right: Full Specs Inspector Panel -->
-  <div class="w-[450px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
-    <h2 class="text-lg font-bold mb-3 text-blue-400">PCB Spec Inspector</h2>
+  <!-- Right: Comprehensive Specs Panel -->
+  <div class="w-[480px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
+    <h2 class="text-lg font-bold mb-3 text-blue-400">Comprehensive Spec Inspector</h2>
     
     <label class="text-xs text-slate-400 mb-1">API Key (session only)</label>
     <input type="password" id="apiKey" placeholder="AI Studio Key (AQ... or AIza...)" class="p-2 mb-3 bg-slate-900 border border-slate-700 rounded text-sm text-white focus:outline-none focus:border-blue-500" />
@@ -32,7 +32,7 @@
     </button>
 
     <div id="specsContainer" class="mt-6 border-t border-slate-800 pt-4 space-y-4">
-      <div class="text-xs text-slate-500 italic">Upload a zip and click extract to scan specifications.</div>
+      <div class="text-xs text-slate-500 italic">Upload a zip and run scan to display all fabrication parameters.</div>
     </div>
   </div>
 
@@ -40,7 +40,7 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     let targetImageBase64 = null;
 
-    // 1. Handle Zip and Extract Fab Drawing
+    // 1. Unpack Zip & Render First Page of Fab Drawing
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -74,7 +74,7 @@
       document.getElementById('status').innerText = `Loaded: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal LLM Extraction for All PCB Specs
+    // 2. Multimodal LLM Extraction for All Standard Specs
     document.getElementById('scanBtn').addEventListener('click', async () => {
       const apiKey = document.getElementById('apiKey').value.trim();
       if (!apiKey || !targetImageBase64) {
@@ -83,25 +83,31 @@
       }
 
       const container = document.getElementById('specsContainer');
-      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Scanning fabrication notes and tables...</div>';
+      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Scanning drawing, stackup tables, and fabrication notes...</div>';
 
-      const prompt = `You are an expert PCB manufacturing CAM engineer.
-Examine this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, and title block) and extract these exact specifications.
+      const prompt = `You are a PCB CAM engineer. Examine this fabrication print (including notes, stackup tables, drill charts, and title blocks).
+Extract these exact fabrication specs.
 
-Rules:
-- If a spec or note is NOT found anywhere in the drawing, set "value" to "No data" and "snippet" to "No data".
-- snippets MUST be exact verbatim quotes from the drawing.
+Strict Rules:
+- If a parameter is NOT explicitly stated, return "No data" for both value and snippet.
+- snippets MUST be exact verbatim quotes from the image.
 
-Return pure JSON matching this schema:
+Return pure JSON matching this exact structure:
 {
-  "part_type": { "value": "e.g. PCB - 2 Layer", "snippet": "verbatim quote or No data" },
-  "material": { "value": "e.g. FR-4.0 170Tg, IPC-4101/126, UL94V-0", "snippet": "verbatim quote or No data" },
-  "core_and_prepreg": { "value": "e.g. # Cores: 1, # PP Sheets: 0", "snippet": "verbatim quote or No data" },
-  "copper_thickness": { "value": "e.g. Outer: 1.0 oz, Inner: N/A", "snippet": "verbatim quote or No data" },
-  "board_thickness": { "value": "e.g. 0.062 in (1.59 mm)", "snippet": "verbatim quote or No data" },
-  "board_thickness_tol": { "value": "e.g. +/- 10%", "snippet": "verbatim quote or No data" },
-  "imbalance_stackup": { "value": "Yes or No", "snippet": "verbatim quote or No data" },
-  "bow_and_twist_tol": { "value": "e.g. max 1% or max 0.75%", "snippet": "verbatim quote or No data" }
+  "part_type": { "value": "e.g. PCB - 2 Layer", "snippet": "..." },
+  "material": { "value": "e.g. FR-4.0 170Tg, IPC-4101/126, UL94V-0", "snippet": "..." },
+  "core_and_prepreg": { "value": "e.g. # Cores: 1, # PP Sheets: 0", "snippet": "..." },
+  "copper_thickness": { "value": "e.g. Outer: 1.0 oz, Inner: N/A", "snippet": "..." },
+  "board_thickness": { "value": "e.g. 0.062 in (1.59 mm)", "snippet": "..." },
+  "board_thickness_tol": { "value": "e.g. +/- 10%", "snippet": "..." },
+  "imbalance_stackup": { "value": "Yes or No", "snippet": "..." },
+  "bow_and_twist_tol": { "value": "e.g. 1%", "snippet": "..." },
+  "surface_finish": { "value": "e.g. ENIG, HASL Lead-Free, OSP, Immersion Silver", "snippet": "..." },
+  "solder_mask": { "value": "e.g. Green, Matte Black, Blue", "snippet": "..." },
+  "silkscreen_color": { "value": "e.g. White, Black", "snippet": "..." },
+  "min_trace_space": { "value": "e.g. 6/6 mil (0.15 mm)", "snippet": "..." },
+  "controlled_impedance": { "value": "Yes (with tolerances) or No", "snippet": "..." },
+  "ipc_class": { "value": "e.g. Class 2, Class 3", "snippet": "..." }
 }`;
 
       try {
@@ -131,7 +137,7 @@ Return pure JSON matching this schema:
 
         const candidate = data.candidates[0];
         if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
-          throw new Error('Model returned an empty body.');
+          throw new Error('Empty response received from the model.');
         }
 
         const parsed = JSON.parse(candidate.content.parts[0].text);
@@ -145,14 +151,20 @@ Return pure JSON matching this schema:
 
     function renderSpecsTable(specs) {
       const labels = {
-        part_type: 'Part Type',
+        part_type: 'Part Type / Layer Count',
         material: 'Material (Tg / IPC / UL)',
-        core_and_prepreg: 'Core & Pre-preg',
-        copper_thickness: 'Cu Thickness',
-        board_thickness: 'Board Thickness',
+        core_and_prepreg: 'Core & Pre-preg Count',
+        copper_thickness: 'Cu Thickness (Inner / Outer)',
+        board_thickness: 'Finished Board Thickness',
         board_thickness_tol: 'Board Thickness Tol.',
         imbalance_stackup: 'Imbalance Stackup',
-        bow_and_twist_tol: 'Bow & Twist Tol.'
+        bow_and_twist_tol: 'Bow & Twist Tol.',
+        surface_finish: 'Surface Finish / Plating',
+        solder_mask: 'Solder Mask Color',
+        silkscreen_color: 'Silkscreen Color',
+        min_trace_space: 'Min Trace / Spacing',
+        controlled_impedance: 'Controlled Impedance',
+        ipc_class: 'IPC Performance Class'
       };
 
       let html = '<div class="space-y-3">';

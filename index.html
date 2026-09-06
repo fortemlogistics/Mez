@@ -2,16 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PCB Spec Inspector Mockup</title>
+  <title>PCB Multi-Spec Inspector Mockup</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 flex h-screen overflow-hidden font-sans">
 
+  <!-- Left: Drawing Viewer -->
   <div class="flex-1 flex flex-col border-r border-slate-800">
     <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
-      <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500" />
+      <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
       <span id="status" class="text-xs text-slate-400">Upload a PCB fabrication zip...</span>
     </div>
     <div id="viewer" class="flex-1 overflow-auto p-4 flex justify-center bg-slate-900">
@@ -19,27 +20,19 @@
     </div>
   </div>
 
-  <div class="w-96 p-6 flex flex-col bg-slate-950">
-    <h2 class="text-lg font-bold mb-4 text-blue-400">Spec Inspector</h2>
+  <!-- Right: Full Specs Inspector Panel -->
+  <div class="w-[450px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
+    <h2 class="text-lg font-bold mb-3 text-blue-400">PCB Spec Inspector</h2>
     
-    <label class="text-xs text-slate-400 mb-1">API Key (stored in session only)</label>
-    <input type="password" id="apiKey" placeholder="AI API Key" class="p-2 mb-4 bg-slate-900 border border-slate-700 rounded text-sm text-white" />
+    <label class="text-xs text-slate-400 mb-1">API Key (session only)</label>
+    <input type="password" id="apiKey" placeholder="AI Studio Key (AQ... or AIza...)" class="p-2 mb-3 bg-slate-900 border border-slate-700 rounded text-sm text-white focus:outline-none focus:border-blue-500" />
 
     <button id="scanBtn" class="w-full py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium text-sm transition">
-      Extract Board Thickness
+      Extract All PCB Specs
     </button>
 
-    <div class="mt-6 border-t border-slate-800 pt-4 space-y-4">
-      <div>
-        <span class="text-xs text-slate-500 uppercase tracking-wider">Suggested Value</span>
-        <div id="resultValue" class="text-xl font-mono text-emerald-400 font-semibold mt-1">--</div>
-      </div>
-      <div>
-        <span class="text-xs text-slate-500 uppercase tracking-wider">Verbatim Reference Snippet</span>
-        <blockquote id="resultSnippet" class="mt-1 p-3 bg-slate-900 border-l-2 border-emerald-400 text-xs italic text-slate-300">
-          No scan performed yet.
-        </blockquote>
-      </div>
+    <div id="specsContainer" class="mt-6 border-t border-slate-800 pt-4 space-y-4">
+      <div class="text-xs text-slate-500 italic">Upload a zip and click extract to scan specifications.</div>
     </div>
   </div>
 
@@ -55,7 +48,6 @@
       document.getElementById('status').innerText = 'Unpacking zip...';
       const zip = await JSZip.loadAsync(file);
 
-      // Find the fabrication drawing PDF
       const pdfEntry = Object.values(zip.files).find(f => 
         f.name.toLowerCase().endsWith('.pdf') && 
         (f.name.toLowerCase().includes('fab') || f.name.toLowerCase().includes('drawing') || f.name.toLowerCase().includes('dwg'))
@@ -82,7 +74,7 @@
       document.getElementById('status').innerText = `Loaded: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal LLM Extraction
+    // 2. Multimodal LLM Extraction for All PCB Specs
     document.getElementById('scanBtn').addEventListener('click', async () => {
       const apiKey = document.getElementById('apiKey').value.trim();
       if (!apiKey || !targetImageBase64) {
@@ -90,14 +82,27 @@
         return;
       }
 
-      document.getElementById('resultValue').innerText = 'Analyzing drawing...';
-      document.getElementById('resultSnippet').innerText = 'Reading fabrication notes...';
+      const container = document.getElementById('specsContainer');
+      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Scanning fabrication notes and tables...</div>';
 
       const prompt = `You are an expert PCB manufacturing CAM engineer.
-Examine this fabrication drawing and locate the OVERALL FINISHED BOARD THICKNESS (including tolerance).
-Check the "FABRICATION NOTES" section and the "LAYER STACK TABLE" at the bottom.
-Do NOT return single foil weights (e.g., 1oz) or dielectric core layers unless referring to overall finished thickness.
-Return pure JSON with exact keys: "value" and "snippet" (the exact verbatim quote from the notes or table).`;
+Examine this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, and title block) and extract these exact specifications.
+
+Rules:
+- If a spec or note is NOT found anywhere in the drawing, set "value" to "No data" and "snippet" to "No data".
+- snippets MUST be exact verbatim quotes from the drawing.
+
+Return pure JSON matching this schema:
+{
+  "part_type": { "value": "e.g. PCB - 2 Layer", "snippet": "verbatim quote or No data" },
+  "material": { "value": "e.g. FR-4.0 170Tg, IPC-4101/126, UL94V-0", "snippet": "verbatim quote or No data" },
+  "core_and_prepreg": { "value": "e.g. # Cores: 1, # PP Sheets: 0", "snippet": "verbatim quote or No data" },
+  "copper_thickness": { "value": "e.g. Outer: 1.0 oz, Inner: N/A", "snippet": "verbatim quote or No data" },
+  "board_thickness": { "value": "e.g. 0.062 in (1.59 mm)", "snippet": "verbatim quote or No data" },
+  "board_thickness_tol": { "value": "e.g. +/- 10%", "snippet": "verbatim quote or No data" },
+  "imbalance_stackup": { "value": "Yes or No", "snippet": "verbatim quote or No data" },
+  "bow_and_twist_tol": { "value": "e.g. max 1% or max 0.75%", "snippet": "verbatim quote or No data" }
+}`;
 
       try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
@@ -121,23 +126,55 @@ Return pure JSON with exact keys: "value" and "snippet" (the exact verbatim quot
         }
 
         if (!data.candidates || data.candidates.length === 0) {
-          throw new Error('No response returned from model.');
+          throw new Error('No candidates returned from the model.');
         }
 
         const candidate = data.candidates[0];
         if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
-          throw new Error('Model produced an empty answer.');
+          throw new Error('Model returned an empty body.');
         }
 
         const parsed = JSON.parse(candidate.content.parts[0].text);
-        document.getElementById('resultValue').innerText = parsed.value || 'Not found';
-        document.getElementById('resultSnippet').innerText = parsed.snippet || 'No direct reference quote located.';
+        renderSpecsTable(parsed);
+
       } catch (err) {
         console.error(err);
-        document.getElementById('resultValue').innerText = 'Error';
-        document.getElementById('resultSnippet').innerText = err.message;
+        container.innerHTML = `<div class="p-3 bg-red-950 border border-red-700 text-red-300 text-xs rounded">${err.message}</div>`;
       }
     });
+
+    function renderSpecsTable(specs) {
+      const labels = {
+        part_type: 'Part Type',
+        material: 'Material (Tg / IPC / UL)',
+        core_and_prepreg: 'Core & Pre-preg',
+        copper_thickness: 'Cu Thickness',
+        board_thickness: 'Board Thickness',
+        board_thickness_tol: 'Board Thickness Tol.',
+        imbalance_stackup: 'Imbalance Stackup',
+        bow_and_twist_tol: 'Bow & Twist Tol.'
+      };
+
+      let html = '<div class="space-y-3">';
+      for (const [key, label] of Object.entries(labels)) {
+        const item = specs[key] || { value: 'No data', snippet: 'No data' };
+        const isNoData = item.value.toLowerCase().includes('no data');
+
+        html += `
+          <div class="border-b border-slate-800 pb-2">
+            <div class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">${label}</div>
+            <div class="text-sm font-semibold mt-0.5 ${isNoData ? 'text-slate-500' : 'text-emerald-400 font-mono'}">
+              ${item.value}
+            </div>
+            <div class="mt-1 text-[11px] italic p-1.5 rounded bg-slate-900 border-l-2 ${isNoData ? 'border-slate-700 text-slate-500' : 'border-emerald-500 text-slate-300'}">
+              ${item.snippet}
+            </div>
+          </div>
+        `;
+      }
+      html += '</div>';
+      document.getElementById('specsContainer').innerHTML = html;
+    }
   </script>
 </body>
 </html>

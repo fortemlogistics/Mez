@@ -24,6 +24,7 @@
 
   <main class="flex-1 flex overflow-hidden">
     
+    <!-- Left: Snippet Canvas Viewport -->
     <section class="flex-1 flex flex-col items-center justify-center p-6 bg-slate-950/80 border-r border-slate-800 relative overflow-auto">
       <div id="snippetPlaceholder" class="text-slate-500 text-sm italic">
         Upload a zip file and click "Run Extraction" to generate snippets.
@@ -37,6 +38,7 @@
       <canvas id="offscreenCanvas" class="hidden"></canvas>
     </section>
 
+    <!-- Right: Parameter Details and Navigation -->
     <aside class="w-[440px] p-8 flex flex-col justify-between bg-slate-900">
       
       <div>
@@ -124,7 +126,7 @@
       document.getElementById('status').innerText = `Ready: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal Extraction Returning Accurate Coordinates for Cropping
+    // 2. Multimodal Extraction Returning Accurate Bounding Boxes
     document.getElementById('scanBtn').addEventListener('click', async () => {
       if (!API_KEY) {
         alert('API Key not found. Open console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
@@ -140,17 +142,132 @@
 
       const prompt = `You are an expert PCB CAM engineer.
 Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and title block).
-Extract each parameter and return its visual 2D bounding box on the drawing.
+Extract each parameter and return its EXACT bounding box tightly enclosing the text on the drawing.
 
 CRITICAL RULES:
-1. "Solder Mask Color": Must be an actual optical color (e.g., Green, Black, White, Blue, Red, Matte Black).
-   - "Solder Resist" is a material, not a color. If only "Solder Resist" is written with no pigment named, return "Non-Specific (EQV)" or "No data".
+1. "Solder Mask Color": Must be an actual optical color (e.g. Green, Black, White, Blue, Red, Matte Black). 
+   - Look in the FABRICATION NOTES under sections like "SOLDERMASK", "LEGEND", or "COLORS".
+   - "Solder Resist" is a material description, NOT a color! If only "Solder Resist" is specified with no color named, return "Non-Specific (EQV)" or "No data".
 2. "Core & Pre-preg": Count laminate cores vs prepregs. For 2-layer rigid: "# of Cores: 1   # of PP Sheets: 0".
-3. "box_2d": An array of 4 normalized integers between 0 and 1000: [ymin, xmin, ymax, xmax] tightly surrounding the target note text or table line.
+3. "box_2d": An array of 4 integers normalized between 0 and 1000: [ymin, xmin, ymax, xmax].
+   - Ensure ymin is the top of the text characters and ymax is the baseline/bottom. Do NOT include excessive empty lines below or above.
    - If a spec is not found, set "value": "No data", "snippet": "No data", and "box_2d": null.
 
 Return pure JSON matching this exact structure:
 [
   { "category": "Stackup", "label": "Part Type / Layers", "value": "e.g. PCB - 2 Layer, Rigid", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Stackup", "label": "Material", "value": "e.g. FR4, UL94V-2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "snippet": "...", "box_2d":
+  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1 oz (1.40 mil), Inner: N/A", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 63 mil (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. +/- 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. X - 1696.0 mil, Y - 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions", "label": "Panel Profile", "value": "e.g. Routing", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Mask & Mark", "label": "Silkscreen Color", "value": "e.g. White", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Black / Non-Specific", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Hole Count", "value": "e.g. 106 Total", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Smallest Hole", "value": "e.g. 10.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance", "label": "IPC Class", "value": "e.g. IPC-6012 Performance Class: 2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance", "label": "RoHS / REACH", "value": "e.g. RoHS Directive and REACH Regulation Compliant", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
+]`;
+
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: 'image/jpeg', data: fullImageBase64 } }
+              ]
+            }],
+            generationConfig: { response_mime_type: 'application/json' }
+          })
+        });
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+
+        specList = JSON.parse(data.candidates[0].content.parts[0].text);
+        currentIndex = 0;
+        document.getElementById('status').innerText = 'Extraction complete.';
+        displayCurrentSpec();
+
+      } catch (err) {
+        console.error(err);
+        document.getElementById('status').innerText = 'Error occurred.';
+        alert(err.message);
+      }
+    });
+
+    // 3. Render the Active Step
+    function displayCurrentSpec() {
+      if (!specList || specList.length === 0) return;
+
+      const item = specList[currentIndex];
+
+      document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
+      document.getElementById('specCategory').innerText = item.category || 'SPEC';
+      document.getElementById('specLabel').innerText = item.label;
+      document.getElementById('specValue').innerText = item.value;
+      document.getElementById('specSnippet').innerText = item.snippet;
+
+      document.getElementById('prevBtn').disabled = (currentIndex === 0);
+      document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);
+
+      renderCroppedSnippet(item.box_2d);
+    }
+
+    // 4. Crop Canvas Cleanly Without Any Highlight Box Overlay
+    function renderCroppedSnippet(box) {
+      const placeholder = document.getElementById('snippetPlaceholder');
+      const canvasWrapper = document.getElementById('canvasWrapper');
+
+      if (!box || !Array.isArray(box) || box.length !== 4) {
+        placeholder.innerText = 'No visual snippet callout located for this parameter.';
+        placeholder.classList.remove('hidden');
+        canvasWrapper.classList.add('hidden');
+        return;
+      }
+
+      placeholder.classList.add('hidden');
+      canvasWrapper.classList.remove('hidden');
+
+      const [ymin, xmin, ymax, xmax] = box;
+      const imgW = offscreenCanvas.width;
+      const imgH = offscreenCanvas.height;
+
+      // Clean context margins around the targeted text
+      const padX = 140;
+      const padY = 50;
+
+      const sx = Math.max(0, (xmin / 1000) * imgW - padX);
+      const sy = Math.max(0, (ymin / 1000) * imgH - padY);
+      const sw = Math.min(imgW - sx, ((xmax - xmin) / 1000) * imgW + padX * 2);
+      const sh = Math.min(imgH - sy, ((ymax - ymin) / 1000) * imgH + padY * 2);
+
+      snippetCanvas.width = sw;
+      snippetCanvas.height = sh;
+
+      const ctx = snippetCanvas.getContext('2d');
+      ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    }
+
+    // 5. Navigation Listeners
+    document.getElementById('prevBtn').addEventListener('click', () => {
+      if (currentIndex > 0) {
+        currentIndex--;
+        displayCurrentSpec();
+      }
+    });
+
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      if (currentIndex < specList.length - 1) {
+        currentIndex++;
+        displayCurrentSpec();
+      }
+    });
+  </script>
+</body>
+</html>

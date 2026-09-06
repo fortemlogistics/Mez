@@ -2,137 +2,167 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PCB Spec Inspector - Visual Snippet View</title>
+  <title>PCB Spec Inspector - Step-by-Step Snippet Review</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
-<body class="bg-slate-900 text-slate-100 flex h-screen overflow-hidden font-sans">
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
 
-  <!-- Left: Visual Inspection / Snippet Viewer -->
-  <div class="flex-1 flex flex-col border-r border-slate-800">
-    <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
-      <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
-      <div class="flex items-center gap-3">
-        <span id="activeSpecTitle" class="text-xs font-semibold text-emerald-400">Full Drawing View</span>
-        <button id="toggleViewBtn" class="hidden text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700 text-slate-300">
-          Reset to Full Sheet
-        </button>
+  <header class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+    <div class="flex items-center gap-4">
+      <h1 class="text-base font-bold text-blue-400">PCB Spec Inspector</h1>
+      <input type="file" id="zipInput" accept=".zip" class="text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
+      <span id="status" class="text-xs text-slate-400">Upload fabrication zip...</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <button id="scanBtn" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold transition shadow-md shadow-blue-900/40">
+        Run Extraction
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 flex overflow-hidden">
+    
+    <section class="flex-1 flex flex-col items-center justify-center p-8 bg-slate-950/80 border-r border-slate-800 relative">
+      <div id="snippetPlaceholder" class="text-slate-500 text-sm italic">
+        Upload a zip file and click "Run Extraction" to generate snippets.
       </div>
-    </div>
-    <div id="viewer" class="flex-1 overflow-auto p-6 flex items-center justify-center bg-slate-950/60">
-      <!-- Full Page Source Canvas (Hidden when viewing cropped snippet) -->
-      <canvas id="pdfCanvas" class="shadow-2xl max-w-full h-auto rounded border border-slate-800"></canvas>
-      <!-- Visual Snippet Crop Canvas -->
-      <canvas id="snippetCanvas" class="hidden shadow-2xl rounded border-2 border-emerald-500/60 bg-white"></canvas>
-    </div>
-  </div>
+      
+      <div id="canvasWrapper" class="hidden flex flex-col items-center max-w-full max-h-full">
+        <canvas id="snippetCanvas" class="shadow-2xl rounded-lg border-2 border-emerald-500/70 bg-white max-h-[75vh] max-w-[90%] object-contain"></canvas>
+        <p class="text-[11px] text-slate-400 mt-2 italic">Cropped direct from fabrication drawing</p>
+      </div>
 
-  <!-- Right: Categorized Specs Panel -->
-  <div class="w-[520px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
-    <h2 class="text-lg font-bold mb-1 text-blue-400">PCB Spec Inspector</h2>
-    <p class="text-[11px] text-slate-400 mb-4">Click any extracted card below to crop into its visual reference callout.</p>
+      <canvas id="offscreenCanvas" class="hidden"></canvas>
+    </section>
 
-    <button id="scanBtn" class="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded font-medium text-sm transition shadow-lg shadow-blue-900/30">
-      Extract All PCB Specs
-    </button>
+    <aside class="w-[440px] p-8 flex flex-col justify-between bg-slate-900">
+      
+      <div>
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-6">
+          <span id="stepCounter" class="text-xs font-mono uppercase tracking-wider text-slate-400">Spec 0 of 0</span>
+          <span id="specCategory" class="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">--</span>
+        </div>
 
-    <div id="specsContainer" class="mt-6 border-t border-slate-800 pt-4 space-y-4">
-      <div class="text-xs text-slate-500 italic">Upload a zip and click extract to scan specifications.</div>
-    </div>
-  </div>
+        <div class="space-y-5">
+          <div>
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Parameter</span>
+            <h2 id="specLabel" class="text-lg font-bold text-white mt-0.5">--</h2>
+          </div>
+
+          <div>
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Suggested Value</span>
+            <div id="specValue" class="text-xl font-mono text-emerald-400 font-semibold mt-1 p-3 bg-slate-950 rounded border border-slate-800">
+              --
+            </div>
+          </div>
+
+          <div>
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Verbatim Reference Quote</span>
+            <blockquote id="specSnippet" class="mt-1 p-3 bg-slate-950 border-l-2 border-emerald-400 text-xs italic text-slate-300 rounded-r">
+              No scan performed yet.
+            </blockquote>
+          </div>
+        </div>
+      </div>
+
+      <footer class="pt-6 border-t border-slate-800 flex items-center justify-between gap-4">
+        <button id="prevBtn" disabled class="flex-1 py-2 px-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-xs font-semibold rounded border border-slate-700 transition">
+          ← Previous
+        </button>
+        <button id="nextBtn" disabled class="flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-xs font-semibold rounded transition shadow-lg shadow-blue-900/30">
+          Next →
+        </button>
+      </footer>
+
+    </aside>
+  </main>
 
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    let targetImageBase64 = null;
-    let fullPageCanvas = document.getElementById('pdfCanvas');
-    let snippetCanvas = document.getElementById('snippetCanvas');
+    
+    let fullImageBase64 = null;
+    let specList = [];
+    let currentIndex = 0;
 
+    const offscreenCanvas = document.getElementById('offscreenCanvas');
+    const snippetCanvas = document.getElementById('snippetCanvas');
     const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
-    // 1. Unpack Zip & Render PDF
+    // 1. Unpack Zip and Render Full PDF Page to Offscreen Canvas
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
+      document.getElementById('status').innerText = 'Unpacking zip...';
       const zip = await JSZip.loadAsync(file);
+
       const pdfEntry = Object.values(zip.files).find(f => 
         f.name.toLowerCase().endsWith('.pdf') && 
         (f.name.toLowerCase().includes('fab') || f.name.toLowerCase().includes('drawing') || f.name.toLowerCase().includes('dwg'))
       ) || Object.values(zip.files).find(f => f.name.toLowerCase().endsWith('.pdf'));
 
       if (!pdfEntry) {
-        alert('No PDF fabrication drawing found in archive.');
+        document.getElementById('status').innerText = 'No PDF found in zip.';
         return;
       }
 
+      document.getElementById('status').innerText = `Rendering ${pdfEntry.name}...`;
       const pdfData = await pdfEntry.async('arraybuffer');
       const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
       const page = await pdf.getPage(1);
 
-      // Render at 2.5x for sharp snippet crops
+      // High resolution scale for clear cropped text
       const viewport = page.getViewport({ scale: 2.5 });
-      fullPageCanvas.height = viewport.height;
-      fullPageCanvas.width = viewport.width;
+      offscreenCanvas.height = viewport.height;
+      offscreenCanvas.width = viewport.width;
 
-      const context = fullPageCanvas.getContext('2d');
+      const context = offscreenCanvas.getContext('2d');
       await page.render({ canvasContext: context, viewport }).promise;
 
-      targetImageBase64 = fullPageCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-      showFullDrawing();
+      fullImageBase64 = offscreenCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+      document.getElementById('status').innerText = `Ready: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal Extraction with Bounding Box Localization
+    // 2. Multimodal Extraction Returning Bounding Boxes
     document.getElementById('scanBtn').addEventListener('click', async () => {
       if (!API_KEY) {
         alert('API Key not found. Open console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
         return;
       }
 
-      if (!targetImageBase64) {
-        alert('Please upload a zip containing a PDF drawing first.');
+      if (!fullImageBase64) {
+        alert('Please select a zip file first.');
         return;
       }
 
-      const container = document.getElementById('specsContainer');
-      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Scanning drawing and isolating visual snippets...</div>';
+      document.getElementById('status').innerText = 'Extracting specs & visual coordinates...';
 
-      const prompt = `You are an expert PCB manufacturing CAM engineer.
-Examine this PCB fabrication print (notes, drill tables, stackup tables, and title blocks).
-Extract all parameters into JSON. 
-CRITICAL REQUIREMENT: For each found specification, return its bounding box coordinates on the image normalized to 1000: [ymin, xmin, ymax, xmax].
-If not found, set "value" to "No data", "snippet" to "No data", and "box_2d" to null.
+      const prompt = `You are an expert PCB CAM engineer.
+Analyze this PCB fabrication drawing and extract each required parameter with its exact visual 2D bounding box on the print.
 
-Output pure JSON with this exact structure:
-{
-  "stackup_material": {
-    "part_type": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "material": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "copper_thickness": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "board_thickness": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "board_thickness_tol": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
-  },
-  "dimensions_panel": {
-    "dim_unit": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "panel_profile": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "beveling": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
-  },
-  "soldermask_marking": {
-    "silkscreen": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "soldermask_color": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "soldermask_thck": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
-  },
-  "holes": {
-    "hole_count": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "smallest_hole": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "blind_buried_vias": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
-  },
-  "compliance_reporting": {
-    "ipc_class": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "rohs": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-    "ul_required": { "value": "...", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
-  }
-}`;
+Requirements:
+- box_2d MUST be 4 normalized integers between 0 and 1000: [ymin, xmin, ymax, xmax] tightly surrounding the text note or table cell.
+- If a spec is not found, set "value": "No data", "snippet": "No data", and "box_2d": null.
+
+Return pure JSON matching this exact structure:
+[
+  { "category": "Stackup", "label": "Part Type / Layers", "value": "e.g. PCB - 2 Layer", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Material", "value": "e.g. FR4, UL94V-2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Core & Pre-preg", "value": "e.g. 1 Core (59 mil FR-4)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1 oz (1.40 mil)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 63 mil (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. +/- 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. 1696.0 x 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions", "label": "Panel Profile", "value": "e.g. Routing", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Mask & Mark", "label": "Silkscreen Color", "value": "e.g. White", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Solder Resist", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Hole Count", "value": "e.g. 106 Total", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Smallest Hole", "value": "e.g. 10.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance", "label": "IPC Class", "value": "e.g. IPC 6012 Class 2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance", "label": "RoHS Compliance", "value": "e.g. Compliant", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
+]`;
 
       try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`, {
@@ -142,7 +172,7 @@ Output pure JSON with this exact structure:
             contents: [{
               parts: [
                 { text: prompt },
-                { inline_data: { mime_type: 'image/jpeg', data: targetImageBase64 } }
+                { inline_data: { mime_type: 'image/jpeg', data: fullImageBase64 } }
               ]
             }],
             generationConfig: { response_mime_type: 'application/json' }
@@ -151,144 +181,99 @@ Output pure JSON with this exact structure:
 
         const data = await response.json();
         if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-        const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
-        renderInteractiveSpecs(parsed);
+
+        specList = JSON.parse(data.candidates[0].content.parts[0].text);
+        currentIndex = 0;
+        document.getElementById('status').innerText = 'Extraction complete.';
+        displayCurrentSpec();
+
       } catch (err) {
         console.error(err);
-        container.innerHTML = `<div class="p-3 bg-red-950 border border-red-700 text-red-300 text-xs rounded">${err.message}</div>`;
+        document.getElementById('status').innerText = 'Error occurred.';
+        alert(err.message);
       }
     });
 
-    // 3. Visual Crop Function
-    window.cropToSnippet = function(title, box) {
-      if (!box || box.length !== 4) return;
+    // 3. Render the Active Step
+    function displayCurrentSpec() {
+      if (!specList || specList.length === 0) return;
+
+      const item = specList[currentIndex];
+      const isNoData = item.value.toLowerCase().includes('no data');
+
+      document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
+      document.getElementById('specCategory').innerText = item.category || 'SPEC';
+      document.getElementById('specLabel').innerText = item.label;
+      document.getElementById('specValue').innerText = item.value;
+      document.getElementById('specSnippet').innerText = item.snippet;
+
+      document.getElementById('prevBtn').disabled = (currentIndex === 0);
+      document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);
+
+      renderCroppedSnippet(item.box_2d);
+    }
+
+    // 4. Crop Canvas to the Target Coordinate Box
+    function renderCroppedSnippet(box) {
+      const placeholder = document.getElementById('snippetPlaceholder');
+      const canvasWrapper = document.getElementById('canvasWrapper');
+
+      if (!box || !Array.isArray(box) || box.length !== 4) {
+        placeholder.innerText = 'No visual snippet callout located for this parameter.';
+        placeholder.classList.remove('hidden');
+        canvasWrapper.classList.add('hidden');
+        return;
+      }
+
+      placeholder.classList.add('hidden');
+      canvasWrapper.classList.remove('hidden');
 
       const [ymin, xmin, ymax, xmax] = box;
-      const imgW = fullPageCanvas.width;
-      const imgH = fullPageCanvas.height;
+      const imgW = offscreenCanvas.width;
+      const imgH = offscreenCanvas.height;
 
-      // Convert normalized 0-1000 box to canvas pixel coordinates with 20px padding
-      const pad = 25;
-      const sx = Math.max(0, (xmin / 1000) * imgW - pad);
-      const sy = Math.max(0, (ymin / 1000) * imgH - pad);
-      const sw = Math.min(imgW - sx, ((xmax - xmin) / 1000) * imgW + pad * 2);
-      const sh = Math.min(imgH - sy, ((ymax - ymin) / 1000) * imgH + pad * 2);
+      // Generous padding around the detected text for CAM context
+      const padX = 60;
+      const padY = 40;
+
+      const sx = Math.max(0, (xmin / 1000) * imgW - padX);
+      const sy = Math.max(0, (ymin / 1000) * imgH - padY);
+      const sw = Math.min(imgW - sx, ((xmax - xmin) / 1000) * imgW + padX * 2);
+      const sh = Math.min(imgH - sy, ((ymax - ymin) / 1000) * imgH + padY * 2);
 
       snippetCanvas.width = sw;
       snippetCanvas.height = sh;
 
       const ctx = snippetCanvas.getContext('2d');
-      ctx.drawImage(fullPageCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+      ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
 
-      fullPageCanvas.classList.add('hidden');
-      snippetCanvas.classList.remove('hidden');
+      // Draw highlighting rectangle around target callout
+      const boxX = (xmin / 1000) * imgW - sx;
+      const boxY = (ymin / 1000) * imgH - sy;
+      const boxW = ((xmax - xmin) / 1000) * imgW;
+      const boxH = ((ymax - ymin) / 1000) * imgH;
 
-      document.getElementById('activeSpecTitle').innerText = `Snippet: ${title}`;
-      document.getElementById('toggleViewBtn').classList.remove('hidden');
-    };
-
-    function showFullDrawing() {
-      snippetCanvas.classList.add('hidden');
-      fullPageCanvas.classList.remove('hidden');
-      document.getElementById('activeSpecTitle').innerText = 'Full Drawing View';
-      document.getElementById('toggleViewBtn').classList.add('hidden');
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 4;
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.strokeRect(boxX, boxY, boxW, boxH);
     }
 
-    document.getElementById('toggleViewBtn').addEventListener('click', showFullDrawing);
+    // 5. Button Listeners
+    document.getElementById('prevBtn').addEventListener('click', () => {
+      if (currentIndex > 0) {
+        currentIndex--;
+        displayCurrentSpec();
+      }
+    });
 
-    // 4. Render Categorized Cards
-    function renderInteractiveSpecs(data) {
-      const sections = [
-        {
-          title: "Stackup & Material",
-          data: data.stackup_material,
-          labels: {
-            part_type: "Part Type",
-            material: "Material",
-            copper_thickness: "Cu Thickness",
-            board_thickness: "Board Thickness",
-            board_thickness_tol: "Board Thickness Tol."
-          }
-        },
-        {
-          title: "Dimensions and Panel",
-          data: data.dimensions_panel,
-          labels: {
-            dim_unit: "DIM-Unit",
-            panel_profile: "Panel Profile",
-            beveling: "Beveling"
-          }
-        },
-        {
-          title: "Solder Mask and Marking",
-          data: data.soldermask_marking,
-          labels: {
-            silkscreen: "Silkscreen",
-            soldermask_color: "Solder Mask Color",
-            soldermask_thck: "Solder Mask Thck"
-          }
-        },
-        {
-          title: "Holes",
-          data: data.holes,
-          labels: {
-            hole_count: "Hole Count",
-            smallest_hole: "Smallest Hole",
-            blind_buried_vias: "Blind / Buried Vias"
-          }
-        },
-        {
-          title: "Compliance & Standards",
-          data: data.compliance_reporting,
-          labels: {
-            ipc_class: "IPC Class",
-            rohs: "RoHS",
-            ul_required: "UL Required"
-          }
-        }
-      ];
-
-      let fullHtml = '';
-
-      sections.forEach(section => {
-        if (!section.data) return;
-
-        fullHtml += `
-          <div class="border border-slate-800 bg-slate-900/70 rounded-lg p-3">
-            <h3 class="text-xs font-bold text-blue-300 uppercase tracking-wider pb-2 border-b border-slate-800">${section.title}</h3>
-            <div class="space-y-2 mt-2">
-        `;
-
-        for (const [key, label] of Object.entries(section.labels)) {
-          const item = section.data[key] || { value: 'No data', snippet: 'No data', box_2d: null };
-          const hasBox = item.box_2d && item.box_2d.length === 4;
-          const isNoData = item.value.toLowerCase().includes('no data');
-
-          fullHtml += `
-            <div 
-              class="text-xs py-1.5 px-2 rounded border border-transparent transition ${hasBox ? 'hover:border-emerald-500/60 hover:bg-slate-800/80 cursor-pointer' : ''}" 
-              ${hasBox ? `onclick='cropToSnippet("${label}", ${JSON.stringify(item.box_2d)})'` : ''}
-            >
-              <div class="flex justify-between items-baseline gap-2">
-                <span class="text-slate-400 font-medium flex items-center gap-1.5">
-                  ${hasBox ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>' : ''}
-                  ${label}
-                </span>
-                <span class="${isNoData ? 'text-slate-500' : 'text-emerald-400 font-semibold'} text-right font-mono">${item.value}</span>
-              </div>
-              <div class="mt-1 text-[10px] italic p-1 bg-slate-950/80 rounded border-l-2 ${isNoData ? 'border-slate-700 text-slate-500' : 'border-emerald-500 text-slate-300'} flex justify-between items-center">
-                <span class="truncate">${item.snippet}</span>
-                ${hasBox ? '<span class="text-[9px] text-emerald-400 font-sans not-italic ml-2 uppercase tracking-tight whitespace-nowrap">View Snippet ↗</span>' : ''}
-              </div>
-            </div>
-          `;
-        }
-
-        fullHtml += `</div></div>`;
-      });
-
-      document.getElementById('specsContainer').innerHTML = fullHtml;
-    }
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      if (currentIndex < specList.length - 1) {
+        currentIndex++;
+        displayCurrentSpec();
+      }
+    });
   </script>
 </body>
 </html>

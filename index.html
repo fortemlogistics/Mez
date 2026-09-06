@@ -90,7 +90,7 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
-    // 1. Unpack Zip and Render Full Drawing to Memory
+    // 1. Unpack Zip and Render Full PDF Page to Offscreen Canvas
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -124,7 +124,7 @@
       document.getElementById('status').innerText = `Ready: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal Extraction Returning Bounding Boxes
+    // 2. Multimodal Extraction Returning Accurate Bounding Boxes
     document.getElementById('scanBtn').addEventListener('click', async () => {
       if (!API_KEY) {
         alert('API Key not found. Open console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
@@ -139,32 +139,34 @@
       document.getElementById('status').innerText = 'Extracting specs & visual coordinates...';
 
       const prompt = `You are an expert PCB CAM engineer.
-Analyze this PCB fabrication drawing (notes, layer stackup table, drill tables, title blocks) and extract each required parameter with its exact visual 2D bounding box.
+Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and title block).
+Extract each parameter and return its EXACT bounding box tightly enclosing the text on the drawing.
 
 CRITICAL RULES:
-1. "Core & Pre-preg": You MUST count the total number of laminate core layers and prepreg (PP) sheets from the layer stackup table. 
-   - Format value strictly as: "# of Cores: <count>   # of PP Sheets: <count>" (e.g., for a standard 2-layer board with a single FR4 core: "# of Cores: 1   # of PP Sheets: 0").
-   - Do NOT return just the thickness. 
-   - box_2d MUST tightly enclose the core/dielectric layer row or callout in the stackup table.
-2. box_2d MUST be 4 normalized integers between 0 and 1000: [ymin, xmin, ymax, xmax].
-3. If a spec is not found or cannot be determined, set "value": "No data", "snippet": "No data", and "box_2d": null.
+1. "Solder Mask Color": Must be an actual optical color (e.g. Green, Black, White, Blue, Red, Matte Black). 
+   - Look in the FABRICATION NOTES under sections like "SOLDERMASK", "LEGEND", or "COLORS".
+   - "Solder Resist" is a material description, NOT a color! If only "Solder Resist" is specified with no color named, return "Non-Specific (EQV)" or "No data".
+2. "Core & Pre-preg": Count laminate cores vs prepregs. For 2-layer rigid: "# of Cores: 1   # of PP Sheets: 0".
+3. "box_2d": An array of 4 integers normalized between 0 and 1000: [ymin, xmin, ymax, xmax].
+   - Ensure ymin is the top of the text characters and ymax is the baseline/bottom. Do NOT include excessive empty lines below or above.
+   - If a spec is not found, set "value": "No data", "snippet": "No data", and "box_2d": null.
 
 Return pure JSON matching this exact structure:
 [
-  { "category": "Stackup", "label": "Part Type / Layers", "value": "e.g. PCB - 2 Layer", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Part Type / Layers", "value": "e.g. PCB - 2 Layer, Rigid", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Stackup", "label": "Material", "value": "e.g. FR4, UL94V-2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "snippet": "e.g. 59.00mil(1.50mm) FR-4 Core", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1.000 (oz) Finish", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 0.062 (in) (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. X - 1696.0 mil   Y - 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1 oz (1.40 mil), Inner: N/A", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 63 mil (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. +/- 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. X - 1696.0 mil, Y - 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Dimensions", "label": "Panel Profile", "value": "e.g. Routing", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Mask & Mark", "label": "Silkscreen Color", "value": "e.g. White", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Black", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Black / Non-Specific", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Holes", "label": "Hole Count", "value": "e.g. 106 Total", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Holes", "label": "Smallest Hole", "value": "e.g. 10.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance", "label": "IPC Class", "value": "e.g. Class II", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance", "label": "RoHS Compliance", "value": "e.g. RoHS 3", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
+  { "category": "Compliance", "label": "IPC Class", "value": "e.g. IPC-6012 Performance Class: 2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance", "label": "RoHS / REACH", "value": "e.g. RoHS Directive and REACH Regulation Compliant", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
 ]`;
 
       try {
@@ -203,7 +205,7 @@ Return pure JSON matching this exact structure:
 
       const item = specList[currentIndex];
 
-      document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
+      document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of${specList.length}`;
       document.getElementById('specCategory').innerText = item.category || 'SPEC';
       document.getElementById('specLabel').innerText = item.label;
       document.getElementById('specValue').innerText = item.value;
@@ -215,7 +217,7 @@ Return pure JSON matching this exact structure:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // 4. Crop Canvas with Expanded Viewport and Larger Bounding Box
+    // 4. Crop Canvas with Centered Vertical Fit
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');
@@ -234,9 +236,9 @@ Return pure JSON matching this exact structure:
       const imgW = offscreenCanvas.width;
       const imgH = offscreenCanvas.height;
 
-      // Expanded contextual padding (horizontal and vertical)
-      const padX = 160;
-      const padY = 70;
+      // Generous contextual crop margins
+      const padX = 140;
+      const padY = 50;
 
       const sx = Math.max(0, (xmin / 1000) * imgW - padX);
       const sy = Math.max(0, (ymin / 1000) * imgH - padY);
@@ -249,22 +251,14 @@ Return pure JSON matching this exact structure:
       const ctx = snippetCanvas.getContext('2d');
       ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
 
-      // Inflate bounding box dimensions so it surrounds the full callout cleanly
-      const boxPadX = 14;
-      const boxPadY = 10;
-
-      const rawBoxX = (xmin / 1000) * imgW - sx;
-      const rawBoxY = (ymin / 1000) * imgH - sy;
-      const rawBoxW = ((xmax - xmin) / 1000) * imgW;
-      const rawBoxH = ((ymax - ymin) / 1000) * imgH;
-
-      const boxX = Math.max(0, rawBoxX - boxPadX);
-      const boxY = Math.max(0, rawBoxY - boxPadY);
-      const boxW = rawBoxW + boxPadX * 2;
-      const boxH = rawBoxH + boxPadY * 2;
+      // Tight bounding box calculation relative to the cropped area
+      const boxX = (xmin / 1000) * imgW - sx;
+      const boxY = (ymin / 1000) * imgH - sy;
+      const boxW = ((xmax - xmin) / 1000) * imgW;
+      const boxH = ((ymax - ymin) / 1000) * imgH;
 
       ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 3;
       ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
       ctx.fillRect(boxX, boxY, boxW, boxH);
       ctx.strokeRect(boxX, boxY, boxW, boxH);

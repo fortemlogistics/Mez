@@ -37,8 +37,8 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     let targetImageBase64 = null;
 
-    // Hardcoded API Key
-   const API_KEY = localStorage.getItem('gemini_api_key') || "";
+    // Pull the key saved in your browser console
+    const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
     // 1. Unpack Zip & Render PDF
     document.getElementById('zipInput').addEventListener('change', async (e) => {
@@ -76,6 +76,11 @@
 
     // 2. Multimodal LLM Extraction
     document.getElementById('scanBtn').addEventListener('click', async () => {
+      if (!API_KEY) {
+        alert('API Key not found in local storage. Re-run localStorage.setItem in the console.');
+        return;
+      }
+
       if (!targetImageBase64) {
         alert('Please upload a zip containing a PDF drawing first.');
         return;

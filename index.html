@@ -9,7 +9,7 @@
 </head>
 <body class="bg-slate-900 text-slate-100 flex h-screen overflow-hidden font-sans">
 
-  <!-- Left: PDF Viewer -->
+  <!-- Left: PDF Drawing Viewer -->
   <div class="flex-1 flex flex-col border-r border-slate-800">
     <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
       <input type="file" id="zipInput" accept=".zip" class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
@@ -21,7 +21,7 @@
   </div>
 
   <!-- Right: Categorized Specs Inspector Panel -->
-  <div class="w-[500px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
+  <div class="w-[520px] p-6 flex flex-col bg-slate-950 overflow-y-auto">
     <h2 class="text-lg font-bold mb-4 text-blue-400">PCB Spec Inspector</h2>
 
     <button id="scanBtn" class="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded font-medium text-sm transition shadow-lg shadow-blue-900/30">
@@ -39,7 +39,7 @@
 
     const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
-    // 1. Unpack Zip & Render PDF
+    // 1. Unpack Zip & Render PDF Page 1
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -73,10 +73,10 @@
       document.getElementById('status').innerText = `Loaded: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal Extraction for All Spec Groups
+    // 2. Multimodal LLM Extraction Across All Spec Domains
     document.getElementById('scanBtn').addEventListener('click', async () => {
       if (!API_KEY) {
-        alert('API Key not found in local storage. Please save it via console.');
+        alert('API Key not found. Open Console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
         return;
       }
 
@@ -86,65 +86,65 @@
       }
 
       const container = document.getElementById('specsContainer');
-      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Scanning drawing, notes, stackup tables, and drill charts...</div>';
+      container.innerHTML = '<div class="text-sm text-blue-400 animate-pulse">Analyzing notes, layer stackup table, dimensions, and drill chart...</div>';
 
       const prompt = `You are an expert PCB manufacturing CAM engineer.
 Examine this PCB fabrication print (all notes, drill tables, layer stackup tables, dimensions, and title blocks).
-Extract all parameters into JSON. If a spec is not stated or cannot be reliably determined, set "value" to "No data" and "snippet" to "No data".
+Extract all parameters into JSON. If a spec is not stated or cannot be determined, set "value" to "No data" and "snippet" to "No data".
 snippets MUST be exact verbatim quotes from the print.
 
 Output pure JSON matching this exact structure:
 {
   "stackup_material": {
     "part_type": { "value": "e.g. PCB - 2 Layer", "snippet": "..." },
-    "material": { "value": "e.g. FR-4 170Tg", "snippet": "..." },
+    "material": { "value": "e.g. FR4, UL94V-2", "snippet": "..." },
     "core_prepreg": { "value": "e.g. # Cores: 1, # PP Sheets: 0", "snippet": "..." },
-    "copper_thickness": { "value": "e.g. Outer: 1.0 oz, Inner: N/A", "snippet": "..." },
-    "board_thickness": { "value": "e.g. 0.062 in (1.59 mm)", "snippet": "..." },
+    "copper_thickness": { "value": "e.g. Outer: 1 oz (1.40 mil), Inner: N/A", "snippet": "..." },
+    "board_thickness": { "value": "e.g. 63 mil (1.59 mm)", "snippet": "..." },
     "board_thickness_tol": { "value": "e.g. +/- 10%", "snippet": "..." },
     "imbalance_stackup": { "value": "Yes or No", "snippet": "..." },
-    "bow_twist_tol": { "value": "e.g. 1%", "snippet": "..." }
+    "bow_twist_tol": { "value": "e.g. 1% or No data", "snippet": "..." }
   },
   "dimensions_panel": {
-    "dim_unit": { "value": "e.g. X - 0.551 in, Y - 0.532 in", "snippet": "..." },
-    "panelized": { "value": "e.g. 48 units/pnl or Single Unit", "snippet": "..." },
-    "dim_panel": { "value": "e.g. X - 4.806 in, Y - 5.956 in or No data", "snippet": "..." },
-    "rails": { "value": "e.g. Rail Count: 4, Width: 0.400 in or No data", "snippet": "..." },
-    "multipanel": { "value": "Yes or No", "snippet": "..." },
-    "panel_profile": { "value": "e.g. Routing, V-Score, Tab-Route", "snippet": "..." },
-    "beveling": { "value": "e.g. Yes (30 deg) or No", "snippet": "..." },
-    "x_out_allow": { "value": "e.g. Yes (10%) or No", "snippet": "..." }
+    "dim_unit": { "value": "e.g. X - 1477.0 mil, Y - 1848.0 mil", "snippet": "..." },
+    "panelized": { "value": "e.g. Single Unit or No data", "snippet": "..." },
+    "dim_panel": { "value": "e.g. No data", "snippet": "..." },
+    "rails": { "value": "e.g. No data", "snippet": "..." },
+    "multipanel": { "value": "No", "snippet": "..." },
+    "panel_profile": { "value": "e.g. Routing or No data", "snippet": "..." },
+    "beveling": { "value": "e.g. 30 degrees or No", "snippet": "..." },
+    "x_out_allow": { "value": "e.g. No data", "snippet": "..." }
   },
   "soldermask_marking": {
     "silkscreen": { "value": "e.g. White", "snippet": "..." },
-    "soldermask_color": { "value": "e.g. Black, Green", "snippet": "..." },
-    "soldermask_finish": { "value": "e.g. Glossy, Matte, Non-Specific", "snippet": "..." },
-    "soldermask_class": { "value": "e.g. Class - T, Class - H", "snippet": "..." },
-    "soldermask_thck": { "value": "e.g. 0.4 mil or No data", "snippet": "..." },
-    "temp_mask": { "value": "Yes or No", "snippet": "..." },
-    "e_test_mark": { "value": "e.g. Yes, No, or Location U/D", "snippet": "..." },
-    "two_d_code": { "value": "Yes or No", "snippet": "..." },
-    "date_code_format": { "value": "e.g. WWYY or No data", "snippet": "..." }
+    "soldermask_color": { "value": "e.g. Solder Resist / Non-Specific", "snippet": "..." },
+    "soldermask_finish": { "value": "e.g. Non-Specific", "snippet": "..." },
+    "soldermask_class": { "value": "e.g. Class - T or No data", "snippet": "..." },
+    "soldermask_thck": { "value": "e.g. 0.4 mil", "snippet": "..." },
+    "temp_mask": { "value": "No", "snippet": "..." },
+    "e_test_mark": { "value": "e.g. Test continuity to all solderable pads", "snippet": "..." },
+    "two_d_code": { "value": "No", "snippet": "..." },
+    "date_code_format": { "value": "e.g. No data", "snippet": "..." }
   },
   "holes": {
     "hole_count": { "value": "e.g. 106 Total", "snippet": "..." },
-    "smallest_hole": { "value": "e.g. 27.559 mil (0.70 mm)", "snippet": "..." },
-    "hole_wall_cu": { "value": "e.g. 0.800 mil (20 um)", "snippet": "..." },
-    "th_plugging": { "value": "Yes or No", "snippet": "..." },
-    "blind_buried_vias": { "value": "e.g. None or Yes", "snippet": "..." },
-    "slots": { "value": "e.g. PTH, NPTH, or None", "snippet": "..." },
-    "backdrill": { "value": "Yes or No", "snippet": "..." },
-    "countersink": { "value": "Yes or No", "snippet": "..." },
-    "pressfit_holes": { "value": "Yes or No", "snippet": "..." }
+    "smallest_hole": { "value": "e.g. 10.0 mil (0.25 mm)", "snippet": "..." },
+    "hole_wall_cu": { "value": "e.g. No data", "snippet": "..." },
+    "th_plugging": { "value": "No", "snippet": "..." },
+    "blind_buried_vias": { "value": "None", "snippet": "..." },
+    "slots": { "value": "None or No data", "snippet": "..." },
+    "backdrill": { "value": "No", "snippet": "..." },
+    "countersink": { "value": "No", "snippet": "..." },
+    "pressfit_holes": { "value": "No", "snippet": "..." }
   },
   "compliance_reporting": {
-    "ipc_class": { "value": "e.g. Class 2, Class 3", "snippet": "..." },
-    "rohs": { "value": "e.g. Compliant / RoHS 3", "snippet": "..." },
-    "reach": { "value": "e.g. Compliant / Yes", "snippet": "..." },
-    "halogen_free": { "value": "Yes or No", "snippet": "..." },
-    "ul_required": { "value": "e.g. Yes (UL94V-0, Logo: Yes)", "snippet": "..." },
-    "fai_ppap": { "value": "e.g. FAI: No, PPAP: No", "snippet": "..." },
-    "ionic_contamination": { "value": "Yes or No", "snippet": "..." }
+    "ipc_class": { "value": "e.g. IPC 6012 Class 2", "snippet": "..." },
+    "rohs": { "value": "e.g. Compliant (Lead-free)", "snippet": "..." },
+    "reach": { "value": "e.g. Compliant", "snippet": "..." },
+    "halogen_free": { "value": "No data", "snippet": "..." },
+    "ul_required": { "value": "e.g. UL94V-2", "snippet": "..." },
+    "fai_ppap": { "value": "No data", "snippet": "..." },
+    "ionic_contamination": { "value": "No data", "snippet": "..." }
   }
 }`;
 
@@ -169,7 +169,7 @@ Output pure JSON matching this exact structure:
         if (!data.candidates || !data.candidates[0].content) throw new Error('Empty response from model.');
 
         const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
-        renderAllSections(parsed);
+        renderCategorizedSpecs(parsed);
 
       } catch (err) {
         console.error(err);
@@ -177,7 +177,7 @@ Output pure JSON matching this exact structure:
       }
     });
 
-    function renderAllSections(data) {
+    function renderCategorizedSpecs(data) {
       const sectionConfigs = [
         {
           title: "Stackup & Material",
@@ -258,7 +258,7 @@ Output pure JSON matching this exact structure:
         if (!section.data) return;
 
         fullHtml += `
-          <div class="border border-slate-800 bg-slate-900/60 rounded-lg p-3">
+          <div class="border border-slate-800 bg-slate-900/70 rounded-lg p-3">
             <h3 class="text-xs font-bold text-blue-300 uppercase tracking-wider pb-2 border-b border-slate-800">${section.title}</h3>
             <div class="space-y-2 mt-2">
         `;
@@ -273,7 +273,7 @@ Output pure JSON matching this exact structure:
                 <span class="text-slate-400 font-medium">${label}</span>
                 <span class="${isNoData ? 'text-slate-500' : 'text-emerald-400 font-semibold'} text-right">${item.value}</span>
               </div>
-              <div class="mt-0.5 text-[10px] italic p-1 bg-slate-950/80 rounded border-l-2 ${isNoData ? 'border-slate-700 text-slate-500' : 'border-emerald-500 text-slate-300'}">
+              <div class="mt-0.5 text-[10px] italic p-1.5 bg-slate-950/80 rounded border-l-2 ${isNoData ? 'border-slate-700 text-slate-500' : 'border-emerald-500 text-slate-300'}">
                 ${item.snippet}
               </div>
             </div>

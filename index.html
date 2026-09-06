@@ -139,28 +139,32 @@
       document.getElementById('status').innerText = 'Extracting specs & visual coordinates...';
 
       const prompt = `You are an expert PCB CAM engineer.
-Analyze this PCB fabrication drawing and extract each required parameter with its exact visual 2D bounding box on the print.
+Analyze this PCB fabrication drawing (notes, layer stackup table, drill tables, title blocks) and extract each required parameter with its exact visual 2D bounding box.
 
-Requirements:
-- box_2d MUST be 4 normalized integers between 0 and 1000: [ymin, xmin, ymax, xmax] tightly surrounding the text note or table cell.
-- If a spec is not found, set "value": "No data", "snippet": "No data", and "box_2d": null.
+CRITICAL RULES:
+1. "Core & Pre-preg": You MUST count the total number of laminate core layers and prepreg (PP) sheets from the layer stackup table. 
+   - Format value strictly as: "# of Cores: <count>   # of PP Sheets: <count>" (e.g., for a standard 2-layer board with a single FR4 core: "# of Cores: 1   # of PP Sheets: 0").
+   - Do NOT return just the thickness. 
+   - box_2d MUST tightly enclose the core/dielectric layer row or callout in the stackup table.
+2. box_2d MUST be 4 normalized integers between 0 and 1000: [ymin, xmin, ymax, xmax].
+3. If a spec is not found or cannot be determined, set "value": "No data", "snippet": "No data", and "box_2d": null.
 
 Return pure JSON matching this exact structure:
 [
   { "category": "Stackup", "label": "Part Type / Layers", "value": "e.g. PCB - 2 Layer", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Stackup", "label": "Material", "value": "e.g. FR4, UL94V-2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Core & Pre-preg", "value": "e.g. 1 Core (59 mil FR-4)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1 oz (1.40 mil)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 63 mil (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. +/- 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. 1696.0 x 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "snippet": "e.g. 59.00mil(1.50mm) FR-4 Core", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1.000 (oz) Finish", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 0.062 (in) (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. X - 1696.0 mil   Y - 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Dimensions", "label": "Panel Profile", "value": "e.g. Routing", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Mask & Mark", "label": "Silkscreen Color", "value": "e.g. White", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Solder Resist", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Black", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Holes", "label": "Hole Count", "value": "e.g. 106 Total", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Holes", "label": "Smallest Hole", "value": "e.g. 10.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance", "label": "IPC Class", "value": "e.g. IPC 6012 Class 2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance", "label": "RoHS Compliance", "value": "e.g. Compliant", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
+  { "category": "Compliance", "label": "IPC Class", "value": "e.g. Class II", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance", "label": "RoHS Compliance", "value": "e.g. RoHS 3", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
 ]`;
 
       try {

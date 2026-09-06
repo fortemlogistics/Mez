@@ -69,16 +69,17 @@
       document.getElementById('status').innerText = `Rendering ${pdfEntry.name}...`;
       const pdfData = await pdfEntry.async('arraybuffer');
       const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-      const page = await pdf.getPage(1); // Inspect first page
+      const page = await pdf.getPage(1);
 
-      const viewport = page.getViewport({ scale: 1.5 });
+      // Render at higher resolution (2.0 scale) so small CAD callouts are legible
+      const viewport = page.getViewport({ scale: 2.0 });
       const canvas = document.getElementById('pdfCanvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
       await page.render({ canvasContext: context, viewport }).promise;
-      targetImageBase64 = canvas.toDataURL('image/jpeg').split(',')[1];
+      targetImageBase64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
       document.getElementById('status').innerText = `Loaded: ${pdfEntry.name}`;
     });
 
@@ -90,13 +91,14 @@
         return;
       }
 
-      document.getElementById('resultValue').innerText = 'Analyzing image...';
+      document.getElementById('resultValue').innerText = 'Analyzing drawing...';
       document.getElementById('resultSnippet').innerText = 'Reading fabrication notes...';
 
-      const prompt = `You are a PCB manufacturing engineer. Analyze this fabrication drawing.
-Extract the OVERALL FINISHED BOARD THICKNESS (including tolerance).
-Do NOT return copper foil weight (e.g. 1oz) or internal dielectric layer thicknesses.
-Return pure JSON with keys: "value" and "snippet" (exact verbatim text quote from notes).`;
+      const prompt = `You are an expert PCB manufacturing CAM engineer.
+Examine this fabrication drawing and locate the OVERALL FINISHED BOARD THICKNESS (including tolerance).
+Check the "FABRICATION NOTES" section and the "LAYER STACK TABLE" at the bottom.
+Do NOT return single foil weights (e.g., 1oz) or dielectric core layers unless referring to overall finished thickness.
+Return pure JSON with exact keys: "value" and "snippet" (the exact verbatim quote from the notes or table).`;
 
       try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
@@ -114,11 +116,29 @@ Return pure JSON with keys: "value" and "snippet" (exact verbatim text quote fro
         });
 
         const data = await response.json();
-        const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+
+        // Check if the API returned an explicit error object
+        if (data.error) {
+          throw new Error(`Google API: ${data.error.message || JSON.stringify(data.error)}`);
+        }
+
+        if (!data.candidates || data.candidates.length === 0) {
+          throw new Error('No candidates returned. Safety filters may have blocked the response.');
+        }
+
+        const candidate = data.candidates[0];
+        if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
+          throw new Error('API returned an empty response part.');
+        }
+
+        const rawText = candidate.content.parts[0].text;
+        const parsed = JSON.parse(rawText);
+
         document.getElementById('resultValue').innerText = parsed.value || 'Not found';
         document.getElementById('resultSnippet').innerText = parsed.snippet || 'No direct reference quote located.';
+
       } catch (err) {
-        console.error(err);
+        console.error('Scan Error:', err);
         document.getElementById('resultValue').innerText = 'Error';
         document.getElementById('resultSnippet').innerText = err.message;
       }

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PCB Spec Inspector - Step-by-Step Snippet Review</title>
+  <title>PCB Spec Inspector - Step-by-Step Review</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -24,38 +24,36 @@
 
   <main class="flex-1 flex overflow-hidden">
     
-    <!-- Left: Snippet Canvas Viewport -->
     <section class="flex-1 flex flex-col items-center justify-center p-6 bg-slate-950/80 border-r border-slate-800 relative overflow-auto">
       <div id="snippetPlaceholder" class="text-slate-500 text-sm italic">
-        Upload a zip file and click "Run Extraction" to generate snippets.
+        Upload a zip file and click "Run Extraction" to inspect specs.
       </div>
       
       <div id="canvasWrapper" class="hidden flex flex-col items-center max-w-full">
-        <canvas id="snippetCanvas" class="shadow-2xl rounded-lg border-2 border-slate-700 bg-white max-w-[95%] h-auto object-contain"></canvas>
-        <p class="text-[11px] text-slate-400 mt-2 italic">Cropped direct from fabrication drawing</p>
+        <canvas id="snippetCanvas" class="shadow-2xl rounded-lg border border-slate-700 bg-white max-w-[95%] h-auto object-contain"></canvas>
+        <p class="text-[11px] text-slate-400 mt-2 italic">Cropped direct from fabrication print</p>
       </div>
 
       <canvas id="offscreenCanvas" class="hidden"></canvas>
     </section>
 
-    <!-- Right: Parameter Details and Navigation -->
     <aside class="w-[440px] p-8 flex flex-col justify-between bg-slate-900">
       
       <div>
         <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-6">
           <span id="stepCounter" class="text-xs font-mono uppercase tracking-wider text-slate-400">Spec 0 of 0</span>
-          <span id="specCategory" class="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">--</span>
+          <span id="specCategory" class="text-[10px] uppercase font-bold tracking-widest px-2.5 py-1 rounded bg-blue-950 text-blue-300 border border-blue-800">--</span>
         </div>
 
         <div class="space-y-6">
           <div>
             <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Parameter</span>
-            <h2 id="specLabel" class="text-lg font-bold text-white mt-1">--</h2>
+            <h2 id="specLabel" class="text-xl font-bold text-white mt-1">--</h2>
           </div>
 
           <div>
             <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">Suggested Value</span>
-            <div id="specValue" class="text-xl font-mono text-emerald-400 font-semibold mt-2 p-4 bg-slate-950 rounded border border-slate-800">
+            <div id="specValue" class="text-xl font-mono text-emerald-400 font-semibold mt-2 p-4 bg-slate-950 rounded border border-slate-800 break-words leading-relaxed">
               --
             </div>
           </div>
@@ -63,10 +61,10 @@
       </div>
 
       <footer class="pt-6 border-t border-slate-800 flex items-center justify-between gap-4">
-        <button id="prevBtn" disabled class="flex-1 py-2 px-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-xs font-semibold rounded border border-slate-700 transition">
+        <button id="prevBtn" disabled class="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-xs font-semibold rounded border border-slate-700 transition">
           ← Previous
         </button>
-        <button id="nextBtn" disabled class="flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-xs font-semibold rounded transition shadow-lg shadow-blue-900/30">
+        <button id="nextBtn" disabled class="flex-1 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-xs font-semibold rounded transition shadow-lg shadow-blue-900/30">
           Next →
         </button>
       </footer>
@@ -85,7 +83,7 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const API_KEY = localStorage.getItem('gemini_api_key') || "";
 
-    // 1. Unpack Zip and Render Full PDF Page to Offscreen Canvas
+    // 1. Unpack Zip & Render First Page of Fab Drawing
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -119,10 +117,10 @@
       document.getElementById('status').innerText = `Ready: ${pdfEntry.name}`;
     });
 
-    // 2. Multimodal Extraction Returning Accurate Bounding Boxes
+    // 2. Multimodal Extraction for Complete Target Schema
     document.getElementById('scanBtn').addEventListener('click', async () => {
       if (!API_KEY) {
-        alert('API Key not found. Open console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
+        alert('API Key not found. Open Console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
         return;
       }
 
@@ -131,37 +129,73 @@
         return;
       }
 
-      document.getElementById('status').innerText = 'Extracting specs & visual coordinates...';
+      document.getElementById('status').innerText = 'Extracting all CAM specifications...';
 
       const prompt = `You are an expert PCB CAM engineer.
-Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and title block).
-Extract each parameter and return its EXACT bounding box tightly enclosing the text on the drawing.
+Examine this PCB fabrication print (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and TITLE BLOCK).
+Extract the required parameters matching this exact list.
+For every parameter, provide its normalized bounding box [ymin, xmin, ymax, xmax] (scale 0-1000) pointing to where the evidence was located. If not stated, set "box_2d": null and "value": "No" or "No data".
 
-CRITICAL RULES:
-1. "Solder Mask Color": Must be an actual optical color (e.g. Green, Black, White, Blue, Red, Matte Black). 
-   - Look in the FABRICATION NOTES under sections like "SOLDERMASK", "LEGEND", or "COLORS".
-   - "Solder Resist" is a material description, NOT a color! If only "Solder Resist" is specified with no color named, return "Non-Specific (EQV)" or "No data".
-2. "Core & Pre-preg": Count laminate cores vs prepregs. For 2-layer rigid: "# of Cores: 1   # of PP Sheets: 0".
-3. "box_2d": An array of 4 integers normalized between 0 and 1000: [ymin, xmin, ymax, xmax].
-   - Ensure ymin is the top of the text characters and ymax is the baseline/bottom. Do NOT include excessive empty lines below or above.
-   - If a spec is not found, set "value": "No data", "snippet": "No data", and "box_2d": null.
+Format Rules:
+- "Core & Pre-preg": Format as "# of Cores: <X>   # of PP Sheets: <Y>"
+- "Cu Thickness": Format as "Inner: <val>   Outer: <val> Finish"
+- "Board Thickness": Format as "<in> Finished Board" or equivalent
+- "Board Thickness Tol.": Format as "Yes <tolerance>%" or "No data"
+- "Bow & Twist Tol.": Format as "Yes <tolerance>%" or "No data"
+- "Surface Finish": Format as "<Type> (e.g. ENIG, HASL Lead-Free)"
+- "DIM-Unit (in)": Format as "X - <val>   Y - <val>"
+- "Solder Mask Color": Must be optical color (e.g. Green, Black, White). Never use "Solder Resist".
+- "Hole Count": Total number of holes from drill chart
+- "Smallest Hole": Smallest finished drill diameter
 
-Return pure JSON matching this exact structure:
+Return pure JSON array matching this exact template:
 [
-  { "category": "Stackup", "label": "Part Type / Layers", "value": "e.g. PCB - 2 Layer, Rigid", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Material", "value": "e.g. FR4, UL94V-2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Copper Thickness", "value": "e.g. Outer: 1 oz (1.40 mil), Inner: N/A", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness", "value": "e.g. 63 mil (1.59 mm)", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "e.g. +/- 10%", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions", "label": "DIM-Unit", "value": "e.g. X - 1696.0 mil, Y - 1840.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions", "label": "Panel Profile", "value": "e.g. Routing", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Mask & Mark", "label": "Silkscreen Color", "value": "e.g. White", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Mask & Mark", "label": "Solder Mask Color", "value": "e.g. Black / Non-Specific", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "Hole Count", "value": "e.g. 106 Total", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "Smallest Hole", "value": "e.g. 10.0 mil", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance", "label": "IPC Class", "value": "e.g. IPC-6012 Performance Class: 2", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance", "label": "RoHS / REACH", "value": "e.g. RoHS Directive and REACH Regulation Compliant", "snippet": "...", "box_2d": [ymin, xmin, ymax, xmax] }
+  { "category": "Stackup", "label": "Part Type", "value": "PCB - 2 Layer", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Material (1)", "value": "FR-4.0 170tg Undefined (EQV), IPC4101: 126, UL: V-0", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Cu Thickness", "value": "Inner: N/A   Outer: 1.000 (oz) Finish", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness", "value": "0.062 (in) Finished Board", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "Yes 10%", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Imbalance Stackup", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Bow & Twist Tol.", "value": "Yes 1%", "box_2d": [ymin, xmin, ymax, xmax] },
+  
+  { "category": "Finishing", "label": "Surface Finish", "value": "ENIG", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Finishing", "label": "Gold Finger", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Finishing", "label": "Edge Plating", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Finishing", "label": "Half-plated Holes", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Dimensions and Panel", "label": "DIM-Unit (in)", "value": "X - 1.696   Y - 1.840 (in)", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Panelized", "value": "Single Unit", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Multipanel", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Panel Profile", "value": "Routing", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Beveling", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "No data", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Circuit Design", "label": "Min. Trace / Space", "value": "Trace - 6.000   Space - 6.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Circuit Design", "label": "Impedance Ctrl", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Circuit Design", "label": "BGA Design", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Solder Mask and Marking", "label": "Silkscreen", "value": "White", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black / Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Finish", "value": "Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Class", "value": "Class - T", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Temp. Mask", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "E-Test Mark", "value": "Yes Location U/D", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Holes", "label": "Hole Count", "value": "106", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Smallest Hole", "value": "10.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "TH Plugging", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Blind Vias", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Buried Vias", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Slots", "value": "PTH", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Compliance and Reporting", "label": "ITAR Regulated", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "IPC Class", "value": "Class II", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "RoHS", "value": "RoHS 3", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "REACH", "value": "Yes", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "UL Required", "value": "Yes Logo: Yes", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Packaging", "label": "Packaging Type", "value": "Bubble Wrap / Standard", "box_2d": [ymin, xmin, ymax, xmax] }
 ]`;
 
       try {
@@ -194,7 +228,7 @@ Return pure JSON matching this exact structure:
       }
     });
 
-    // 3. Render the Active Step
+    // 3. Render the Active Parameter Step
     function displayCurrentSpec() {
       if (!specList || specList.length === 0) return;
 
@@ -211,7 +245,7 @@ Return pure JSON matching this exact structure:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // 4. Crop Canvas Cleanly Without Any Highlight Box Overlay
+    // 4. Crop Canvas Cleanly (No Bounding Box or Lines Drawn)
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');
@@ -230,7 +264,7 @@ Return pure JSON matching this exact structure:
       const imgW = offscreenCanvas.width;
       const imgH = offscreenCanvas.height;
 
-      // Clean context margins around the targeted text
+      // Symmetrical margins around text
       const padX = 140;
       const padY = 50;
 

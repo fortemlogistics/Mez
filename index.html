@@ -2,16 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
   <title>PCB Spec Inspector - Step-by-Step Review</title>
-  
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  
-  <!-- Primary: jsDelivr (highest corporate whitelist rate) -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/build/pdf.min.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
 
@@ -33,18 +26,13 @@
   <!-- Main Wizard Workspace -->
   <main class="flex-1 flex overflow-hidden">
     
-    <!-- Left: Cropped Drawing Snippet -->
-    <section class="flex-1 flex flex-col items-center justify-center p-6 bg-slate-950/80 border-r border-slate-800 relative overflow-auto">
-      <div id="snippetPlaceholder" class="text-slate-500 text-sm italic">
+    <!-- Left: Native Browser PDF Viewer (Zero CDN Dependencies) -->
+    <section class="flex-1 flex flex-col items-center justify-center p-4 bg-slate-950/80 border-r border-slate-800 relative">
+      <div id="viewerPlaceholder" class="text-slate-500 text-sm italic">
         Upload a file and click "Run Extraction" to inspect specs.
       </div>
       
-      <div id="canvasWrapper" class="hidden flex flex-col items-center max-w-full">
-        <canvas id="snippetCanvas" class="shadow-2xl rounded-lg border border-slate-700 bg-white max-w-[95%] h-auto object-contain"></canvas>
-        <p class="text-[11px] text-slate-400 mt-2 italic">Cropped direct from fabrication print</p>
-      </div>
-
-      <canvas id="offscreenCanvas" class="hidden"></canvas>
+      <iframe id="pdfFrame" class="hidden w-full h-full rounded border border-slate-800 bg-white"></iframe>
     </section>
 
     <!-- Right: Single Parameter Card -->
@@ -84,80 +72,52 @@
   </main>
 
   <script>
-    let fullImageBase64 = null;
+    let pdfBase64 = null;
     let specList = [];
     let currentIndex = 0;
 
-    const offscreenCanvas = document.getElementById('offscreenCanvas');
-    const snippetCanvas = document.getElementById('snippetCanvas');
     const statusEl = document.getElementById('status');
+    const pdfFrame = document.getElementById('pdfFrame');
+    const viewerPlaceholder = document.getElementById('viewerPlaceholder');
 
-    // Dynamic Loader with CDN fallback chain
-    async function ensurePdfEngine() {
-      if (window.pdfjsLib || window['pdfjs-dist/build/pdf']) {
-        const engine = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
-        engine.GlobalWorkerOptions.workerSrc = false;
-        return engine;
+    // Helper: Convert ArrayBuffer to Base64 cleanly in chunks
+    function arrayBufferToBase64(buffer) {
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i += 8192) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 8192, len)));
       }
-
-      // If jsDelivr script tag failed, try loading from cdnjs directly via DOM injection
-      return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
-        script.onload = () => {
-          const engine = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
-          if (engine) {
-            engine.GlobalWorkerOptions.workerSrc = false;
-            resolve(engine);
-          } else {
-            reject(new Error("Unable to initialize PDF engine from secondary mirror."));
-          }
-        };
-        script.onerror = () => reject(new Error("Corporate network blocked CDN access for PDF.js."));
-        document.head.appendChild(script);
-      });
+      return window.btoa(binary);
     }
 
-    // Render ArrayBuffer to Offscreen Canvas
-    async function renderPdfBuffer(pdfBuffer, displayName) {
-      statusEl.innerText = `Rendering ${displayName}...`;
-      const pdfEngine = await ensurePdfEngine();
-
-      const loadingTask = pdfEngine.getDocument({
-        data: new Uint8Array(pdfBuffer),
-        disableFontFace: true
-      });
-      
-      const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1);
-
-      const viewport = page.getViewport({ scale: 2.5 });
-      offscreenCanvas.height = viewport.height;
-      offscreenCanvas.width = viewport.width;
-
-      const context = offscreenCanvas.getContext('2d');
-      await page.render({ canvasContext: context, viewport: viewport }).promise;
-
-      fullImageBase64 = offscreenCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-      statusEl.innerText = `Ready: ${displayName}`;
-    }
-
-    // Find PDF entry in archive
+    // Direct search for PDF inside zip
     function findPdfEntry(zipInstance) {
       const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
-      
       let match = entries.find(f => {
         const n = f.name.toLowerCase().replace(/\\/g, '/');
         return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
       });
-
       if (!match) {
         match = entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
       }
       return match;
     }
 
-    // File Upload Handler
+    // Load PDF bytes into native browser frame & save Base64 for Gemini
+    function loadPdfData(buffer, filename) {
+      pdfBase64 = arrayBufferToBase64(buffer);
+      const blob = new Blob([buffer], { type: 'application/pdf' });
+      const blobUrl = URL.createObjectURL(blob);
+      
+      pdfFrame.src = blobUrl;
+      pdfFrame.classList.remove('hidden');
+      viewerPlaceholder.classList.add('hidden');
+      
+      statusEl.innerText = `Ready: ${filename}`;
+    }
+
+    // File Upload Handler (No external PDF.js engine needed)
     document.getElementById('fileInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -169,7 +129,7 @@
 
         // 1. Direct PDF Upload
         if (file.name.toLowerCase().endsWith('.pdf')) {
-          await renderPdfBuffer(arrayBuffer, file.name);
+          loadPdfData(arrayBuffer, file.name);
           return;
         }
 
@@ -177,7 +137,7 @@
         const zip = await JSZip.loadAsync(arrayBuffer);
         let pdfEntry = findPdfEntry(zip);
 
-        // 3. Nested Zips
+        // Nested zips check
         if (!pdfEntry) {
           const innerZips = Object.values(zip.files).filter(f => !f.dir && f.name.toLowerCase().endsWith('.zip'));
           for (const z of innerZips) {
@@ -185,14 +145,9 @@
               const innerBytes = await z.async('arraybuffer');
               const innerZip = await JSZip.loadAsync(innerBytes);
               pdfEntry = findPdfEntry(innerZip);
-              if (pdfEntry) {
-                const cleanName = pdfEntry.name.split('/').pop().split('\\').pop();
-                const pdfBytes = await pdfEntry.async('arraybuffer');
-                await renderPdfBuffer(pdfBytes, cleanName);
-                return;
-              }
+              if (pdfEntry) break;
             } catch (innerErr) {
-              console.warn('Inner zip inspection failed:', z.name, innerErr);
+              console.warn(innerErr);
             }
           }
         }
@@ -203,22 +158,22 @@
             .map(f => f.name.split('/').pop().split('\\').pop());
 
           statusEl.innerText = 'No PDF found inside archive.';
-          alert(`No PDF drawing found inside "${file.name}".\n\nDetected files:\n` + (names.length ? names.slice(0, 15).join('\n') : 'Archive appears empty.'));
+          alert(`No PDF drawing found inside "${file.name}".\n\nDetected files:\n` + names.slice(0, 15).join('\n'));
           return;
         }
 
         const cleanName = pdfEntry.name.split('/').pop().split('\\').pop();
         const pdfBytes = await pdfEntry.async('arraybuffer');
-        await renderPdfBuffer(pdfBytes, cleanName);
+        loadPdfData(pdfBytes, cleanName);
 
       } catch (err) {
-        console.error('File Error:', err);
+        console.error(err);
         statusEl.innerText = 'Failed to load file.';
         alert(`Error opening "${file.name}":\n` + (err.message || err));
       }
     });
 
-    // Multimodal Extraction
+    // Multimodal Extraction Sending Native PDF to Gemini
     document.getElementById('scanBtn').addEventListener('click', async () => {
       let apiKey = localStorage.getItem('gemini_api_key');
       if (!apiKey) {
@@ -227,19 +182,19 @@
         localStorage.setItem('gemini_api_key', apiKey.trim());
       }
 
-      if (!fullImageBase64) {
+      if (!pdfBase64) {
         alert('Please select a zip or pdf file first.');
         return;
       }
 
-      statusEl.innerText = 'Extracting specs...';
+      statusEl.innerText = 'Extracting CAM specs...';
 
-      const prompt = `You are an expert PCB CAM engineer.
+      const prompt = `You are an expert PCB CAM engineer performing strict drawing inspection.
 Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and TITLE BLOCK).
 
 CRITICAL RULES:
 1. ZERO-HALLUCINATION DEFAULT:
-   - If a specification (such as CTI, impedance control, or specific tolerances) is NOT printed verbatim on the drawing, you MUST return "value": "NOT_SPECIFIED" and "box_2d": null.
+   - If a specification (such as CTI, impedance control, or specific tolerances) is NOT printed verbatim on the drawing, you MUST return "value": "NOT_SPECIFIED".
    - Do NOT assume standard industry values or infer unstated ratings.
 
 2. CONTROLLED VOCABULARY:
@@ -248,54 +203,54 @@ CRITICAL RULES:
    - Solder Mask Color: Must be optical color (e.g. Green, Black, White). If only "Solder Resist" is noted with no color, return "Non-Specific (EQV)".
    - Hole Count: Extract total count from DRILL TABLE summary row or sum the tool quantities.
 
-Return pure JSON matching this exact template:
+Return pure JSON array matching this exact template:
 [
-  { "category": "Stackup", "label": "Part Type", "value": "PCB - 2 Layer", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Material (1)", "value": "FR-4.0 170tg Undefined (EQV), IPC4101: 126, UL: V-0", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Cu Thickness", "value": "Inner: N/A   Outer: 1.000 (oz) Finish", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness", "value": "0.062 (in) Finished Board", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "Yes 10%", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Imbalance Stackup", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Stackup", "label": "Bow & Twist Tol.", "value": "Yes 1%", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Stackup", "label": "Part Type", "value": "PCB - 2 Layer" },
+  { "category": "Stackup", "label": "Material (1)", "value": "FR-4.0 170tg Undefined (EQV), IPC4101: 126, UL: V-0" },
+  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0" },
+  { "category": "Stackup", "label": "Cu Thickness", "value": "Inner: N/A   Outer: 1.000 (oz) Finish" },
+  { "category": "Stackup", "label": "Board Thickness", "value": "0.062 (in) Finished Board" },
+  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "Yes 10%" },
+  { "category": "Stackup", "label": "Imbalance Stackup", "value": "No" },
+  { "category": "Stackup", "label": "Bow & Twist Tol.", "value": "Yes 1%" },
   
-  { "category": "Finishing", "label": "Surface Finish", "value": "ENIG", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Finishing", "label": "Gold Finger", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Finishing", "label": "Edge Plating", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Finishing", "label": "Half-plated Holes", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Finishing", "label": "Surface Finish", "value": "ENIG" },
+  { "category": "Finishing", "label": "Gold Finger", "value": "No" },
+  { "category": "Finishing", "label": "Edge Plating", "value": "No" },
+  { "category": "Finishing", "label": "Half-plated Holes", "value": "No" },
 
-  { "category": "Dimensions and Panel", "label": "DIM-Unit (in)", "value": "X - 1.696   Y - 1.840 (in)", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions and Panel", "label": "Panelized", "value": "Single Unit", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions and Panel", "label": "Multipanel", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions and Panel", "label": "Panel Profile", "value": "Routing", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions and Panel", "label": "Beveling", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "NOT_SPECIFIED", "box_2d": null },
+  { "category": "Dimensions and Panel", "label": "DIM-Unit (in)", "value": "X - 1.696   Y - 1.840 (in)" },
+  { "category": "Dimensions and Panel", "label": "Panelized", "value": "Single Unit" },
+  { "category": "Dimensions and Panel", "label": "Multipanel", "value": "No" },
+  { "category": "Dimensions and Panel", "label": "Panel Profile", "value": "Routing" },
+  { "category": "Dimensions and Panel", "label": "Beveling", "value": "No" },
+  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "NOT_SPECIFIED" },
 
-  { "category": "Circuit Design", "label": "Min. Trace / Space", "value": "Trace - 6.000   Space - 6.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Circuit Design", "label": "Impedance Ctrl", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Circuit Design", "label": "BGA Design", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Circuit Design", "label": "Min. Trace / Space", "value": "Trace - 6.000   Space - 6.000 (mil)" },
+  { "category": "Circuit Design", "label": "Impedance Ctrl", "value": "No" },
+  { "category": "Circuit Design", "label": "BGA Design", "value": "No" },
 
-  { "category": "Solder Mask and Marking", "label": "Silkscreen", "value": "White", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Finish", "value": "Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Class", "value": "Class - T", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Solder Mask and Marking", "label": "Temp. Mask", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Solder Mask and Marking", "label": "E-Test Mark", "value": "Yes Location U/D", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Silkscreen", "value": "White" },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black" },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Finish", "value": "Non-Specific" },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Class", "value": "Class - T" },
+  { "category": "Solder Mask and Marking", "label": "Temp. Mask", "value": "No" },
+  { "category": "Solder Mask and Marking", "label": "E-Test Mark", "value": "Yes Location U/D" },
 
-  { "category": "Holes", "label": "Hole Count", "value": "106", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "Smallest Hole", "value": "10.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "TH Plugging", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "Blind Vias", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "Buried Vias", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Holes", "label": "Slots", "value": "PTH", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Hole Count", "value": "106" },
+  { "category": "Holes", "label": "Smallest Hole", "value": "10.000 (mil)" },
+  { "category": "Holes", "label": "TH Plugging", "value": "No" },
+  { "category": "Holes", "label": "Blind Vias", "value": "No" },
+  { "category": "Holes", "label": "Buried Vias", "value": "No" },
+  { "category": "Holes", "label": "Slots", "value": "PTH" },
 
-  { "category": "Compliance and Reporting", "label": "ITAR Regulated", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance and Reporting", "label": "IPC Class", "value": "Class II", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance and Reporting", "label": "RoHS", "value": "RoHS 3", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance and Reporting", "label": "REACH", "value": "Yes", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Compliance and Reporting", "label": "UL Required", "value": "Yes Logo: Yes", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "ITAR Regulated", "value": "No" },
+  { "category": "Compliance and Reporting", "label": "IPC Class", "value": "Class II" },
+  { "category": "Compliance and Reporting", "label": "RoHS", "value": "RoHS 3" },
+  { "category": "Compliance and Reporting", "label": "REACH", "value": "Yes" },
+  { "category": "Compliance and Reporting", "label": "UL Required", "value": "Yes Logo: Yes" },
 
-  { "category": "Packaging", "label": "Packaging Type", "value": "Bubble Wrap / Standard", "box_2d": [ymin, xmin, ymax, xmax] }
+  { "category": "Packaging", "label": "Packaging Type", "value": "Bubble Wrap / Standard" }
 ]`;
 
       try {
@@ -306,7 +261,7 @@ Return pure JSON matching this exact template:
             contents: [{
               parts: [
                 { text: prompt },
-                { inline_data: { mime_type: 'image/jpeg', data: fullImageBase64 } }
+                { inline_data: { mime_type: 'application/pdf', data: pdfBase64 } }
               ]
             }],
             generationConfig: { response_mime_type: 'application/json' }
@@ -341,42 +296,6 @@ Return pure JSON matching this exact template:
 
       document.getElementById('prevBtn').disabled = (currentIndex === 0);
       document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);
-
-      renderCroppedSnippet(item.box_2d);
-    }
-
-    // Clean Canvas Cropping
-    function renderCroppedSnippet(box) {
-      const placeholder = document.getElementById('snippetPlaceholder');
-      const canvasWrapper = document.getElementById('canvasWrapper');
-
-      if (!box || !Array.isArray(box) || box.length !== 4) {
-        placeholder.innerText = 'No visual snippet callout located for this parameter.';
-        placeholder.classList.remove('hidden');
-        canvasWrapper.classList.add('hidden');
-        return;
-      }
-
-      placeholder.classList.add('hidden');
-      canvasWrapper.classList.remove('hidden');
-
-      const [ymin, xmin, ymax, xmax] = box;
-      const imgW = offscreenCanvas.width;
-      const imgH = offscreenCanvas.height;
-
-      const padX = 140;
-      const padY = 50;
-
-      const sx = Math.max(0, (xmin / 1000) * imgW - padX);
-      const sy = Math.max(0, (ymin / 1000) * imgH - padY);
-      const sw = Math.min(imgW - sx, ((xmax - xmin) / 1000) * imgW + padX * 2);
-      const sh = Math.min(imgH - sy, ((ymax - ymin) / 1000) * imgH + padY * 2);
-
-      snippetCanvas.width = sw;
-      snippetCanvas.height = sh;
-
-      const ctx = snippetCanvas.getContext('2d');
-      ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
     }
 
     // Navigation Listeners

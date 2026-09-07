@@ -26,7 +26,7 @@
   <!-- Main Wizard Workspace -->
   <main class="flex-1 flex overflow-hidden">
     
-    <!-- Left: Native Browser PDF Viewer (Zero CDN Dependencies) -->
+    <!-- Left: Native Browser PDF Viewer -->
     <section class="flex-1 flex flex-col items-center justify-center p-4 bg-slate-950/80 border-r border-slate-800 relative">
       <div id="viewerPlaceholder" class="text-slate-500 text-sm italic">
         Upload a file and click "Run Extraction" to inspect specs.
@@ -80,7 +80,6 @@
     const pdfFrame = document.getElementById('pdfFrame');
     const viewerPlaceholder = document.getElementById('viewerPlaceholder');
 
-    // Helper: Convert ArrayBuffer to Base64 cleanly in chunks
     function arrayBufferToBase64(buffer) {
       let binary = '';
       const bytes = new Uint8Array(buffer);
@@ -91,7 +90,6 @@
       return window.btoa(binary);
     }
 
-    // Direct search for PDF inside zip
     function findPdfEntry(zipInstance) {
       const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
       let match = entries.find(f => {
@@ -104,7 +102,6 @@
       return match;
     }
 
-    // Load PDF bytes into native browser frame & save Base64 for Gemini
     function loadPdfData(buffer, filename) {
       pdfBase64 = arrayBufferToBase64(buffer);
       const blob = new Blob([buffer], { type: 'application/pdf' });
@@ -117,7 +114,6 @@
       statusEl.innerText = `Ready: ${filename}`;
     }
 
-    // File Upload Handler (No external PDF.js engine needed)
     document.getElementById('fileInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -127,17 +123,14 @@
       try {
         const arrayBuffer = await file.arrayBuffer();
 
-        // 1. Direct PDF Upload
         if (file.name.toLowerCase().endsWith('.pdf')) {
           loadPdfData(arrayBuffer, file.name);
           return;
         }
 
-        // 2. Zip Upload
         const zip = await JSZip.loadAsync(arrayBuffer);
         let pdfEntry = findPdfEntry(zip);
 
-        // Nested zips check
         if (!pdfEntry) {
           const innerZips = Object.values(zip.files).filter(f => !f.dir && f.name.toLowerCase().endsWith('.zip'));
           for (const z of innerZips) {
@@ -173,7 +166,6 @@
       }
     });
 
-    // Multimodal Extraction Sending Native PDF to Gemini
     document.getElementById('scanBtn').addEventListener('click', async () => {
       let apiKey = localStorage.getItem('gemini_api_key');
       if (!apiKey) {
@@ -193,125 +185,4 @@
 Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and TITLE BLOCK).
 
 CRITICAL RULES:
-1. ZERO-HALLUCINATION DEFAULT:
-   - If a specification (such as CTI, impedance control, or specific tolerances) is NOT printed verbatim on the drawing, you MUST return "value": "NOT_SPECIFIED".
-   - Do NOT assume standard industry values or infer unstated ratings.
-
-2. CONTROLLED VOCABULARY:
-   - Surface Finish: Map "Tin/Lead" or "Sn/Pb" -> "HASL"; "Immersion Gold" or "Electroless Nickel Immersion Gold" -> "ENIG".
-   - Solder Mask Class: Map "Class 2" -> "Class - T"; "Class 3" -> "Class - H".
-   - Solder Mask Color: Must be optical color (e.g. Green, Black, White). If only "Solder Resist" is noted with no color, return "Non-Specific (EQV)".
-   - Hole Count: Extract total count from DRILL TABLE summary row or sum the tool quantities.
-
-Return pure JSON array matching this exact template:
-[
-  { "category": "Stackup", "label": "Part Type", "value": "PCB - 2 Layer" },
-  { "category": "Stackup", "label": "Material (1)", "value": "FR-4.0 170tg Undefined (EQV), IPC4101: 126, UL: V-0" },
-  { "category": "Stackup", "label": "Core & Pre-preg", "value": "# of Cores: 1   # of PP Sheets: 0" },
-  { "category": "Stackup", "label": "Cu Thickness", "value": "Inner: N/A   Outer: 1.000 (oz) Finish" },
-  { "category": "Stackup", "label": "Board Thickness", "value": "0.062 (in) Finished Board" },
-  { "category": "Stackup", "label": "Board Thickness Tol.", "value": "Yes 10%" },
-  { "category": "Stackup", "label": "Imbalance Stackup", "value": "No" },
-  { "category": "Stackup", "label": "Bow & Twist Tol.", "value": "Yes 1%" },
-  
-  { "category": "Finishing", "label": "Surface Finish", "value": "ENIG" },
-  { "category": "Finishing", "label": "Gold Finger", "value": "No" },
-  { "category": "Finishing", "label": "Edge Plating", "value": "No" },
-  { "category": "Finishing", "label": "Half-plated Holes", "value": "No" },
-
-  { "category": "Dimensions and Panel", "label": "DIM-Unit (in)", "value": "X - 1.696   Y - 1.840 (in)" },
-  { "category": "Dimensions and Panel", "label": "Panelized", "value": "Single Unit" },
-  { "category": "Dimensions and Panel", "label": "Multipanel", "value": "No" },
-  { "category": "Dimensions and Panel", "label": "Panel Profile", "value": "Routing" },
-  { "category": "Dimensions and Panel", "label": "Beveling", "value": "No" },
-  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "NOT_SPECIFIED" },
-
-  { "category": "Circuit Design", "label": "Min. Trace / Space", "value": "Trace - 6.000   Space - 6.000 (mil)" },
-  { "category": "Circuit Design", "label": "Impedance Ctrl", "value": "No" },
-  { "category": "Circuit Design", "label": "BGA Design", "value": "No" },
-
-  { "category": "Solder Mask and Marking", "label": "Silkscreen", "value": "White" },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black" },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Finish", "value": "Non-Specific" },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Class", "value": "Class - T" },
-  { "category": "Solder Mask and Marking", "label": "Temp. Mask", "value": "No" },
-  { "category": "Solder Mask and Marking", "label": "E-Test Mark", "value": "Yes Location U/D" },
-
-  { "category": "Holes", "label": "Hole Count", "value": "106" },
-  { "category": "Holes", "label": "Smallest Hole", "value": "10.000 (mil)" },
-  { "category": "Holes", "label": "TH Plugging", "value": "No" },
-  { "category": "Holes", "label": "Blind Vias", "value": "No" },
-  { "category": "Holes", "label": "Buried Vias", "value": "No" },
-  { "category": "Holes", "label": "Slots", "value": "PTH" },
-
-  { "category": "Compliance and Reporting", "label": "ITAR Regulated", "value": "No" },
-  { "category": "Compliance and Reporting", "label": "IPC Class", "value": "Class II" },
-  { "category": "Compliance and Reporting", "label": "RoHS", "value": "RoHS 3" },
-  { "category": "Compliance and Reporting", "label": "REACH", "value": "Yes" },
-  { "category": "Compliance and Reporting", "label": "UL Required", "value": "Yes Logo: Yes" },
-
-  { "category": "Packaging", "label": "Packaging Type", "value": "Bubble Wrap / Standard" }
-]`;
-
-      try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: prompt },
-                { inline_data: { mime_type: 'application/pdf', data: pdfBase64 } }
-              ]
-            }],
-            generationConfig: { response_mime_type: 'application/json' }
-          })
-        });
-
-        const data = await response.json();
-        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-
-        specList = JSON.parse(data.candidates[0].content.parts[0].text);
-        currentIndex = 0;
-        statusEl.innerText = 'Extraction complete.';
-        displayCurrentSpec();
-
-      } catch (err) {
-        console.error(err);
-        statusEl.innerText = 'Error occurred.';
-        alert(err.message);
-      }
-    });
-
-    // Step Controller
-    function displayCurrentSpec() {
-      if (!specList || specList.length === 0) return;
-
-      const item = specList[currentIndex];
-
-      document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
-      document.getElementById('specCategory').innerText = item.category || 'SPEC';
-      document.getElementById('specLabel').innerText = item.label;
-      document.getElementById('specValue').innerText = (item.value === "NOT_SPECIFIED" ? "Not Specified" : item.value);
-
-      document.getElementById('prevBtn').disabled = (currentIndex === 0);
-      document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);
-    }
-
-    // Navigation Listeners
-    document.getElementById('prevBtn').addEventListener('click', () => {
-      if (currentIndex > 0) {
-        currentIndex--;
-        displayCurrentSpec();
-      }
-    });
-
-    document.getElementById('nextBtn').addEventListener('click', () => {
-      if (currentIndex < specList.length - 1) {
-        currentIndex++;
-        displayCurrentSpec();
-      }
-    });
-  </script>
-</body>
-</html>
+1. ZERO-HALLUCINATION

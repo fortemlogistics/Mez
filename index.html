@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>PCB Spec Inspector - Step-by-Step Review</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -9,7 +12,7 @@
 </head>
 <body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
 
-  <!-- Header without API Key Input -->
+  <!-- Header -->
   <header class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
     <div class="flex items-center gap-4">
       <h1 class="text-base font-bold text-blue-400">PCB Spec Inspector</h1>
@@ -78,7 +81,8 @@
   </main>
 
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    // Disable external worker fetching to avoid CORS restrictions on static origins
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
     
     let fullImageBase64 = null;
     let specList = [];
@@ -88,30 +92,36 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const statusEl = document.getElementById('status');
 
-    // Helper: Find PDF entry even inside nested zip structures
+    // Helper: Recursively search for any PDF file inside main zip and nested zips
     async function locatePdfInZip(zipInstance) {
-      const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
+      const files = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
       
-      // 1. Direct PDF search (priority to drawing keywords)
-      let pdf = entries.find(f => {
-        const n = f.name.toLowerCase();
+      // 1. Direct search prioritizing drawing / fab keywords
+      let pdfEntry = files.find(f => {
+        const n = f.name.toLowerCase().replace(/\\/g, '/');
         return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
-      }) || entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
+      }) || files.find(f => f.name.toLowerCase().endsWith('.pdf'));
 
-      if (pdf) return pdf;
+      if (pdfEntry) return pdfEntry;
 
-      // 2. Check for nested zips if no direct PDF found
-      const nestedZipFile = entries.find(f => f.name.toLowerCase().endsWith('.zip'));
-      if (nestedZipFile) {
-        const innerBuffer = await nestedZipFile.async('arraybuffer');
-        const innerZip = await JSZip.loadAsync(innerBuffer);
-        return await locatePdfInZip(innerZip);
+      // 2. Search inside any nested zip files
+      for (const entry of files) {
+        if (entry.name.toLowerCase().endsWith('.zip')) {
+          try {
+            const nestedData = await entry.async('arraybuffer');
+            const nestedZip = await JSZip.loadAsync(nestedData);
+            const foundInNested = await locatePdfInZip(nestedZip);
+            if (foundInNested) return foundInNested;
+          } catch (e) {
+            console.warn('Could not read nested zip:', entry.name, e);
+          }
+        }
       }
 
       return null;
     }
 
-    // 1. Unpack Zip Handler with Immediate UI Feedback
+    // 1. Unpack Zip Handler
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -125,17 +135,21 @@
         const pdfFile = await locatePdfInZip(zip);
 
         if (!pdfFile) {
-          const fileNames = Object.values(zip.files).filter(f => !f.dir && !f.name.includes('__MACOSX')).map(f => f.name.split('/').pop());
+          const fileNames = Object.values(zip.files)
+            .filter(f => !f.dir && !f.name.includes('__MACOSX'))
+            .map(f => f.name.split('/').pop().split('\\').pop());
+
           statusEl.innerText = 'No PDF found inside archive.';
-          alert(`No PDF drawing found inside "${file.name}".\n\nFound files:\n` + fileNames.slice(0, 10).join('\n'));
+          alert(`No PDF drawing found inside "${file.name}".\n\nFiles detected:\n` + fileNames.slice(0, 12).join('\n'));
           return;
         }
 
-        const cleanName = pdfFile.name.split('/').pop();
+        const cleanName = pdfFile.name.split('/').pop().split('\\').pop();
         statusEl.innerText = `Rendering ${cleanName}...`;
 
         const pdfBytes = await pdfFile.async('arraybuffer');
-        const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) });
+        const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
 
         const viewport = page.getViewport({ scale: 2.5 });
@@ -148,9 +162,9 @@
         fullImageBase64 = offscreenCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
         statusEl.innerText = `Ready: ${cleanName}`;
       } catch (err) {
-        console.error('Zip Error:', err);
+        console.error('Extraction Error:', err);
         statusEl.innerText = 'Failed to read zip.';
-        alert(`Error opening "${file.name}": ` + err.message);
+        alert(`Error opening "${file.name}":\n` + (err.message || err));
       }
     });
 
@@ -284,7 +298,7 @@ Return pure JSON array matching this exact template:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // 4. Clean Canvas Cropping (No green boxes or stroke lines)
+    // 4. Clean Canvas Cropping (No Bounding Lines)
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');

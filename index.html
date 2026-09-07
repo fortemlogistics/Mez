@@ -13,9 +13,19 @@
     <div class="flex items-center gap-4">
       <h1 class="text-base font-bold text-blue-400">PCB Spec Inspector</h1>
       <input type="file" id="zipInput" accept=".zip" class="text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
-      <span id="status" class="text-xs text-slate-400">Upload fabrication zip...</span>
+      <span id="status" class="text-xs text-slate-300 font-mono">Upload fabrication zip...</span>
     </div>
+    
     <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <label for="apiKeyInput" class="text-xs text-slate-400">API Key:</label>
+        <input 
+          type="password" 
+          id="apiKeyInput" 
+          placeholder="AI Studio Key (AQ...)" 
+          class="bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-blue-500 w-52"
+        />
+      </div>
       <button id="scanBtn" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold transition shadow-md shadow-blue-900/40">
         Run Extraction
       </button>
@@ -81,45 +91,52 @@
 
     const offscreenCanvas = document.getElementById('offscreenCanvas');
     const snippetCanvas = document.getElementById('snippetCanvas');
-    const API_KEY = localStorage.getItem('gemini_api_key') || "";
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const statusEl = document.getElementById('status');
 
-    // 1. Recursive Zip Unpacker & Resilient PDF Detection
+    // Auto-load API Key from localStorage
+    const storedKey = localStorage.getItem('gemini_api_key') || "";
+    if (storedKey) {
+      apiKeyInput.value = storedKey;
+    }
+
+    // Auto-save API Key when entered
+    apiKeyInput.addEventListener('input', (e) => {
+      localStorage.setItem('gemini_api_key', e.target.value.trim());
+    });
+
+    // 1. Unpack Zip with Deep PDF Discovery
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
-      const status = document.getElementById('status');
       if (!file) return;
 
-      status.innerText = 'Unpacking zip...';
+      statusEl.innerText = `Reading ${file.name}...`;
 
       try {
-        const zip = await JSZip.loadAsync(file);
-        const entries = Object.values(zip.files).filter(f => !f.dir && !f.name.startsWith('__MACOSX'));
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
 
-        console.log('Zip contents:', entries.map(f => f.name));
+        const fileEntries = Object.values(zip.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
+        console.log('Zip files:', fileEntries.map(f => f.name));
 
-        // Prioritize drawings and fabrication prints
-        let targetPdf = entries.find(f => {
-          const name = f.name.toLowerCase();
-          return name.endsWith('.pdf') && (name.includes('fab') || name.includes('dwg') || name.includes('drawing'));
-        });
+        // Locate any pdf file
+        let pdfFile = fileEntries.find(f => {
+          const n = f.name.toLowerCase();
+          return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
+        }) || fileEntries.find(f => f.name.toLowerCase().endsWith('.pdf'));
 
-        // Fallback to any valid PDF in the archive
-        if (!targetPdf) {
-          targetPdf = entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
-        }
-
-        if (!targetPdf) {
-          const extensions = [...new Set(entries.map(f => f.name.split('.').pop()))].join(', ');
-          status.innerText = `No PDF inside. Found files: .${extensions}`;
-          alert(`No PDF drawing found inside "${file.name}".\n\nDetected files:\n` + entries.map(f => f.name).slice(0, 10).join('\n'));
+        if (!pdfFile) {
+          const names = fileEntries.map(f => f.name.split('/').pop()).slice(0, 8).join(', ');
+          statusEl.innerText = 'No PDF found in zip.';
+          alert(`No PDF drawing found inside "${file.name}".\n\nFound files:\n${names}`);
           return;
         }
 
-        const fileNameOnly = targetPdf.name.split('/').pop();
-        status.innerText = `Rendering ${fileNameOnly}...`;
+        const cleanName = pdfFile.name.split('/').pop();
+        statusEl.innerText = `Rendering ${cleanName}...`;
 
-        const pdfData = await targetPdf.async('arraybuffer');
-        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+        const pdfBytes = await pdfFile.async('arraybuffer');
+        const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
         const page = await pdf.getPage(1);
 
         const viewport = page.getViewport({ scale: 2.5 });
@@ -130,30 +147,33 @@
         await page.render({ canvasContext: context, viewport }).promise;
 
         fullImageBase64 = offscreenCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-        status.innerText = `Ready: ${fileNameOnly}`;
+        statusEl.innerText = `Ready: ${cleanName}`;
       } catch (err) {
         console.error(err);
-        status.innerText = 'Failed to load archive.';
-        alert('Error parsing zip file: ' + err.message);
+        statusEl.innerText = 'Zip load error.';
+        alert(`Failed to extract "${file.name}": ` + err.message);
       }
     });
 
-    // 2. Multimodal Extraction Across All Spec Domains
+    // 2. Multimodal Extraction
     document.getElementById('scanBtn').addEventListener('click', async () => {
-      if (!API_KEY) {
-        alert('API Key not found. Open Console (F12) and run: localStorage.setItem("gemini_api_key", "YOUR_KEY")');
+      const apiKey = apiKeyInput.value.trim() || localStorage.getItem('gemini_api_key');
+      if (!apiKey) {
+        alert('Please paste your Gemini API Key in the top header.');
+        apiKeyInput.focus();
         return;
       }
+      localStorage.setItem('gemini_api_key', apiKey);
 
       if (!fullImageBase64) {
         alert('Please select a zip file first.');
         return;
       }
 
-      document.getElementById('status').innerText = 'Extracting all CAM specifications...';
+      statusEl.innerText = 'Extracting specs...';
 
       const prompt = `You are an expert PCB CAM engineer.
-Examine this PCB fabrication print (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and TITLE BLOCK).
+Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and TITLE BLOCK).
 Extract the required parameters matching this exact list.
 For every parameter, provide its normalized bounding box [ymin, xmin, ymax, xmax] (scale 0-1000) pointing to where the evidence was located. If not stated, set "box_2d": null and "value": "No" or "No data".
 
@@ -185,4 +205,135 @@ Return pure JSON array matching this exact template:
   { "category": "Finishing", "label": "Edge Plating", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Finishing", "label": "Half-plated Holes", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
 
-  { "category": "Dimensions and Panel", "label": "DIM-Unit (in)", "value": "X - 1.696   Y - 1.840 (in
+  { "category": "Dimensions and Panel", "label": "DIM-Unit (in)", "value": "X - 1.696   Y - 1.840 (in)", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Panelized", "value": "Single Unit", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Multipanel", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Panel Profile", "value": "Routing", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "Beveling", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "No data", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Circuit Design", "label": "Min. Trace / Space", "value": "Trace - 6.000   Space - 6.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Circuit Design", "label": "Impedance Ctrl", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Circuit Design", "label": "BGA Design", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Solder Mask and Marking", "label": "Silkscreen", "value": "White", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black / Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Finish", "value": "Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Class", "value": "Class - T", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Temp. Mask", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "E-Test Mark", "value": "Yes Location U/D", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Holes", "label": "Hole Count", "value": "106", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Smallest Hole", "value": "10.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "TH Plugging", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Blind Vias", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Buried Vias", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Holes", "label": "Slots", "value": "PTH", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Compliance and Reporting", "label": "ITAR Regulated", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "IPC Class", "value": "Class II", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "RoHS", "value": "RoHS 3", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "REACH", "value": "Yes", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Compliance and Reporting", "label": "UL Required", "value": "Yes Logo: Yes", "box_2d": [ymin, xmin, ymax, xmax] },
+
+  { "category": "Packaging", "label": "Packaging Type", "value": "Bubble Wrap / Standard", "box_2d": [ymin, xmin, ymax, xmax] }
+]`;
+
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: 'image/jpeg', data: fullImageBase64 } }
+              ]
+            }],
+            generationConfig: { response_mime_type: 'application/json' }
+          })
+        });
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+
+        specList = JSON.parse(data.candidates[0].content.parts[0].text);
+        currentIndex = 0;
+        statusEl.innerText = 'Extraction complete.';
+        displayCurrentSpec();
+
+      } catch (err) {
+        console.error(err);
+        statusEl.innerText = 'Error occurred.';
+        alert(err.message);
+      }
+    });
+
+    // 3. Step Controller
+    function displayCurrentSpec() {
+      if (!specList || specList.length === 0) return;
+
+      const item = specList[currentIndex];
+
+      document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
+      document.getElementById('specCategory').innerText = item.category || 'SPEC';
+      document.getElementById('specLabel').innerText = item.label;
+      document.getElementById('specValue').innerText = item.value;
+
+      document.getElementById('prevBtn').disabled = (currentIndex === 0);
+      document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);
+
+      renderCroppedSnippet(item.box_2d);
+    }
+
+    // 4. Crop Canvas Cleanly
+    function renderCroppedSnippet(box) {
+      const placeholder = document.getElementById('snippetPlaceholder');
+      const canvasWrapper = document.getElementById('canvasWrapper');
+
+      if (!box || !Array.isArray(box) || box.length !== 4) {
+        placeholder.innerText = 'No visual snippet callout located for this parameter.';
+        placeholder.classList.remove('hidden');
+        canvasWrapper.classList.add('hidden');
+        return;
+      }
+
+      placeholder.classList.add('hidden');
+      canvasWrapper.classList.remove('hidden');
+
+      const [ymin, xmin, ymax, xmax] = box;
+      const imgW = offscreenCanvas.width;
+      const imgH = offscreenCanvas.height;
+
+      const padX = 140;
+      const padY = 50;
+
+      const sx = Math.max(0, (xmin / 1000) * imgW - padX);
+      const sy = Math.max(0, (ymin / 1000) * imgH - padY);
+      const sw = Math.min(imgW - sx, ((xmax - xmin) / 1000) * imgW + padX * 2);
+      const sh = Math.min(imgH - sy, ((ymax - ymin) / 1000) * imgH + padY * 2);
+
+      snippetCanvas.width = sw;
+      snippetCanvas.height = sh;
+
+      const ctx = snippetCanvas.getContext('2d');
+      ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    }
+
+    // 5. Navigation Listeners
+    document.getElementById('prevBtn').addEventListener('click', () => {
+      if (currentIndex > 0) {
+        currentIndex--;
+        displayCurrentSpec();
+      }
+    });
+
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      if (currentIndex < specList.length - 1) {
+        currentIndex++;
+        displayCurrentSpec();
+      }
+    });
+  </script>
+</body>
+</html>

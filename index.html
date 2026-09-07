@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>PCB Spec Inspector - Step-by-Step Review</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
-    // Correctly point to the official PDF.js worker
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   </script>
 </head>
@@ -90,7 +92,7 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const statusEl = document.getElementById('status');
 
-    // Helper: Render an ArrayBuffer of PDF data to the offscreen canvas
+    // Render an ArrayBuffer of PDF data to the offscreen canvas
     async function renderPdfBuffer(pdfBuffer, displayName) {
       statusEl.innerText = `Rendering ${displayName}...`;
       const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
@@ -107,36 +109,24 @@
       statusEl.innerText = `Ready: ${displayName}`;
     }
 
-    // Helper: Recursively search for any PDF file inside main zip and nested zips
-    async function locatePdfInZip(zipInstance) {
-      const files = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
+    // Direct, flat search for PDF in a zip
+    function findPdfEntry(zipInstance) {
+      const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
       
-      // 1. Direct search prioritizing drawing / fab keywords
-      let pdfEntry = files.find(f => {
+      // 1. Look for drawing keywords first
+      let match = entries.find(f => {
         const n = f.name.toLowerCase().replace(/\\/g, '/');
         return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
-      }) || files.find(f => f.name.toLowerCase().endsWith('.pdf'));
+      });
 
-      if (pdfEntry) return pdfEntry;
-
-      // 2. Search inside any nested zip files
-      for (const entry of files) {
-        if (entry.name.toLowerCase().endsWith('.zip')) {
-          try {
-            const nestedData = await entry.async('arraybuffer');
-            const nestedZip = await JSZip.loadAsync(nestedData);
-            const foundInNested = await locatePdfInZip(nestedZip);
-            if (foundInNested) return foundInNested;
-          } catch (e) {
-            console.warn('Could not read nested zip:', entry.name, e);
-          }
-        }
+      // 2. Otherwise take ANY .pdf found anywhere in any subfolder
+      if (!match) {
+        match = entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
       }
-
-      return null;
+      return match;
     }
 
-    // 1. File Upload Handler (Zip or direct PDF)
+    // File Upload Handler (Handles Direct PDF, Standard Zip, and Zip-within-Zip)
     document.getElementById('fileInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -146,23 +136,43 @@
       try {
         const arrayBuffer = await file.arrayBuffer();
 
-        // Handle direct PDF upload
+        // 1. If direct PDF
         if (file.name.toLowerCase().endsWith('.pdf')) {
           await renderPdfBuffer(arrayBuffer, file.name);
           return;
         }
 
-        // Handle Zip upload
+        // 2. If Zip
         const zip = await JSZip.loadAsync(arrayBuffer);
-        const pdfEntry = await locatePdfInZip(zip);
+        let pdfEntry = findPdfEntry(zip);
+
+        // 3. If not found at top/subfolders, check inner nested zips
+        if (!pdfEntry) {
+          const innerZips = Object.values(zip.files).filter(f => !f.dir && f.name.toLowerCase().endsWith('.zip'));
+          for (const z of innerZips) {
+            try {
+              const innerBytes = await z.async('arraybuffer');
+              const innerZip = await JSZip.loadAsync(innerBytes);
+              pdfEntry = findPdfEntry(innerZip);
+              if (pdfEntry) {
+                const cleanName = pdfEntry.name.split('/').pop().split('\\').pop();
+                const pdfBytes = await pdfEntry.async('arraybuffer');
+                await renderPdfBuffer(pdfBytes, cleanName);
+                return;
+              }
+            } catch (innerErr) {
+              console.warn('Could not inspect inner zip:', z.name, innerErr);
+            }
+          }
+        }
 
         if (!pdfEntry) {
-          const fileNames = Object.values(zip.files)
+          const names = Object.values(zip.files)
             .filter(f => !f.dir && !f.name.includes('__MACOSX'))
             .map(f => f.name.split('/').pop().split('\\').pop());
 
           statusEl.innerText = 'No PDF found inside archive.';
-          alert(`No PDF drawing found inside "${file.name}".\n\nFiles detected:\n` + (fileNames.length ? fileNames.slice(0, 15).join('\n') : 'Archive appears empty.'));
+          alert(`No PDF drawing found inside "${file.name}".\n\nFiles detected:\n` + (names.length ? names.slice(0, 15).join('\n') : 'Archive empty.'));
           return;
         }
 
@@ -177,7 +187,7 @@
       }
     });
 
-    // 2. Multimodal Extraction
+    // Multimodal Extraction
     document.getElementById('scanBtn').addEventListener('click', async () => {
       let apiKey = localStorage.getItem('gemini_api_key');
       if (!apiKey) {
@@ -290,7 +300,7 @@ Return pure JSON array matching this exact template:
       }
     });
 
-    // 3. Step Controller
+    // Step Controller
     function displayCurrentSpec() {
       if (!specList || specList.length === 0) return;
 
@@ -307,7 +317,7 @@ Return pure JSON array matching this exact template:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // 4. Clean Canvas Cropping (No Bounding Lines)
+    // Clean Canvas Cropping (No Bounding Lines)
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');
@@ -341,7 +351,7 @@ Return pure JSON array matching this exact template:
       ctx.drawImage(offscreenCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
     }
 
-    // 5. Navigation Listeners
+    // Navigation Listeners
     document.getElementById('prevBtn').addEventListener('click', () => {
       if (currentIndex > 0) {
         currentIndex--;

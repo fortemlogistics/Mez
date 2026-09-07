@@ -9,6 +9,7 @@
 </head>
 <body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
 
+  <!-- Header without API Key Input -->
   <header class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
     <div class="flex items-center gap-4">
       <h1 class="text-base font-bold text-blue-400">PCB Spec Inspector</h1>
@@ -16,24 +17,17 @@
       <span id="status" class="text-xs text-slate-300 font-mono">Upload fabrication zip...</span>
     </div>
     
-    <div class="flex items-center gap-3">
-      <div class="flex items-center gap-2">
-        <label for="apiKeyInput" class="text-xs text-slate-400">API Key:</label>
-        <input 
-          type="password" 
-          id="apiKeyInput" 
-          placeholder="AI Studio Key (AQ...)" 
-          class="bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-blue-500 w-52"
-        />
-      </div>
-      <button id="scanBtn" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold transition shadow-md shadow-blue-900/40">
+    <div>
+      <button id="scanBtn" class="px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold transition shadow-md shadow-blue-900/40">
         Run Extraction
       </button>
     </div>
   </header>
 
+  <!-- Main Wizard Workspace -->
   <main class="flex-1 flex overflow-hidden">
     
+    <!-- Left: Cropped Drawing Snippet -->
     <section class="flex-1 flex flex-col items-center justify-center p-6 bg-slate-950/80 border-r border-slate-800 relative overflow-auto">
       <div id="snippetPlaceholder" class="text-slate-500 text-sm italic">
         Upload a zip file and click "Run Extraction" to inspect specs.
@@ -47,6 +41,7 @@
       <canvas id="offscreenCanvas" class="hidden"></canvas>
     </section>
 
+    <!-- Right: Single Parameter Card -->
     <aside class="w-[440px] p-8 flex flex-col justify-between bg-slate-900">
       
       <div>
@@ -91,21 +86,32 @@
 
     const offscreenCanvas = document.getElementById('offscreenCanvas');
     const snippetCanvas = document.getElementById('snippetCanvas');
-    const apiKeyInput = document.getElementById('apiKeyInput');
     const statusEl = document.getElementById('status');
 
-    // Auto-load API Key from localStorage
-    const storedKey = localStorage.getItem('gemini_api_key') || "";
-    if (storedKey) {
-      apiKeyInput.value = storedKey;
+    // Helper: Find PDF entry even inside nested zip structures
+    async function locatePdfInZip(zipInstance) {
+      const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
+      
+      // 1. Direct PDF search (priority to drawing keywords)
+      let pdf = entries.find(f => {
+        const n = f.name.toLowerCase();
+        return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
+      }) || entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
+
+      if (pdf) return pdf;
+
+      // 2. Check for nested zips if no direct PDF found
+      const nestedZipFile = entries.find(f => f.name.toLowerCase().endsWith('.zip'));
+      if (nestedZipFile) {
+        const innerBuffer = await nestedZipFile.async('arraybuffer');
+        const innerZip = await JSZip.loadAsync(innerBuffer);
+        return await locatePdfInZip(innerZip);
+      }
+
+      return null;
     }
 
-    // Auto-save API Key when entered
-    apiKeyInput.addEventListener('input', (e) => {
-      localStorage.setItem('gemini_api_key', e.target.value.trim());
-    });
-
-    // 1. Unpack Zip with Deep PDF Discovery
+    // 1. Unpack Zip Handler with Immediate UI Feedback
     document.getElementById('zipInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -116,19 +122,12 @@
         const arrayBuffer = await file.arrayBuffer();
         const zip = await JSZip.loadAsync(arrayBuffer);
 
-        const fileEntries = Object.values(zip.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
-        console.log('Zip files:', fileEntries.map(f => f.name));
-
-        // Locate any pdf file
-        let pdfFile = fileEntries.find(f => {
-          const n = f.name.toLowerCase();
-          return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
-        }) || fileEntries.find(f => f.name.toLowerCase().endsWith('.pdf'));
+        const pdfFile = await locatePdfInZip(zip);
 
         if (!pdfFile) {
-          const names = fileEntries.map(f => f.name.split('/').pop()).slice(0, 8).join(', ');
-          statusEl.innerText = 'No PDF found in zip.';
-          alert(`No PDF drawing found inside "${file.name}".\n\nFound files:\n${names}`);
+          const fileNames = Object.values(zip.files).filter(f => !f.dir && !f.name.includes('__MACOSX')).map(f => f.name.split('/').pop());
+          statusEl.innerText = 'No PDF found inside archive.';
+          alert(`No PDF drawing found inside "${file.name}".\n\nFound files:\n` + fileNames.slice(0, 10).join('\n'));
           return;
         }
 
@@ -149,21 +148,20 @@
         fullImageBase64 = offscreenCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
         statusEl.innerText = `Ready: ${cleanName}`;
       } catch (err) {
-        console.error(err);
-        statusEl.innerText = 'Zip load error.';
-        alert(`Failed to extract "${file.name}": ` + err.message);
+        console.error('Zip Error:', err);
+        statusEl.innerText = 'Failed to read zip.';
+        alert(`Error opening "${file.name}": ` + err.message);
       }
     });
 
     // 2. Multimodal Extraction
     document.getElementById('scanBtn').addEventListener('click', async () => {
-      const apiKey = apiKeyInput.value.trim() || localStorage.getItem('gemini_api_key');
+      let apiKey = localStorage.getItem('gemini_api_key');
       if (!apiKey) {
-        alert('Please paste your Gemini API Key in the top header.');
-        apiKeyInput.focus();
-        return;
+        apiKey = prompt('Please enter your Gemini API Key:');
+        if (!apiKey) return;
+        localStorage.setItem('gemini_api_key', apiKey.trim());
       }
-      localStorage.setItem('gemini_api_key', apiKey);
 
       if (!fullImageBase64) {
         alert('Please select a zip file first.');
@@ -286,7 +284,7 @@ Return pure JSON array matching this exact template:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // 4. Crop Canvas Cleanly
+    // 4. Clean Canvas Cropping (No green boxes or stroke lines)
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');

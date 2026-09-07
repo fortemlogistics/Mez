@@ -8,9 +8,14 @@
   <title>PCB Spec Inspector - Step-by-Step Review</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- Rock-solid PDF.js build with global fallback -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    // Ensure pdfjsLib is bound to window regardless of CDN loader format
+    window.pdfjsLib = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    }
   </script>
 </head>
 <body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
@@ -92,10 +97,19 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const statusEl = document.getElementById('status');
 
+    function getPdfLib() {
+      const lib = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+      if (!lib) {
+        throw new Error("PDF processing engine failed to load. Check your internet connection or ad-blocker.");
+      }
+      return lib;
+    }
+
     // Render an ArrayBuffer of PDF data to the offscreen canvas
     async function renderPdfBuffer(pdfBuffer, displayName) {
       statusEl.innerText = `Rendering ${displayName}...`;
-      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
+      const pdfjs = getPdfLib();
+      const pdf = await pdfjs.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
       const page = await pdf.getPage(1);
 
       const viewport = page.getViewport({ scale: 2.5 });
@@ -109,24 +123,22 @@
       statusEl.innerText = `Ready: ${displayName}`;
     }
 
-    // Direct, flat search for PDF in a zip
+    // Search for PDF in a zip
     function findPdfEntry(zipInstance) {
       const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
       
-      // 1. Look for drawing keywords first
       let match = entries.find(f => {
         const n = f.name.toLowerCase().replace(/\\/g, '/');
         return n.endsWith('.pdf') && (n.includes('fab') || n.includes('dwg') || n.includes('drawing') || n.includes('print'));
       });
 
-      // 2. Otherwise take ANY .pdf found anywhere in any subfolder
       if (!match) {
         match = entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
       }
       return match;
     }
 
-    // File Upload Handler (Handles Direct PDF, Standard Zip, and Zip-within-Zip)
+    // File Upload Handler
     document.getElementById('fileInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -136,17 +148,17 @@
       try {
         const arrayBuffer = await file.arrayBuffer();
 
-        // 1. If direct PDF
+        // 1. Direct PDF
         if (file.name.toLowerCase().endsWith('.pdf')) {
           await renderPdfBuffer(arrayBuffer, file.name);
           return;
         }
 
-        // 2. If Zip
+        // 2. Zip archive
         const zip = await JSZip.loadAsync(arrayBuffer);
         let pdfEntry = findPdfEntry(zip);
 
-        // 3. If not found at top/subfolders, check inner nested zips
+        // 3. Nested zips inside the archive
         if (!pdfEntry) {
           const innerZips = Object.values(zip.files).filter(f => !f.dir && f.name.toLowerCase().endsWith('.zip'));
           for (const z of innerZips) {

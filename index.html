@@ -6,17 +6,12 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>PCB Spec Inspector - Step-by-Step Review</title>
+  
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <!-- Rock-solid PDF.js build with global fallback -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-  <script>
-    // Ensure pdfjsLib is bound to window regardless of CDN loader format
-    window.pdfjsLib = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
-    if (window.pdfjsLib) {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
-    }
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  
+  <!-- Primary: jsDelivr (highest corporate whitelist rate) -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/build/pdf.min.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
 
@@ -97,19 +92,43 @@
     const snippetCanvas = document.getElementById('snippetCanvas');
     const statusEl = document.getElementById('status');
 
-    function getPdfLib() {
-      const lib = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
-      if (!lib) {
-        throw new Error("PDF processing engine failed to load. Check your internet connection or ad-blocker.");
+    // Dynamic Loader with CDN fallback chain
+    async function ensurePdfEngine() {
+      if (window.pdfjsLib || window['pdfjs-dist/build/pdf']) {
+        const engine = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+        engine.GlobalWorkerOptions.workerSrc = false;
+        return engine;
       }
-      return lib;
+
+      // If jsDelivr script tag failed, try loading from cdnjs directly via DOM injection
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
+        script.onload = () => {
+          const engine = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+          if (engine) {
+            engine.GlobalWorkerOptions.workerSrc = false;
+            resolve(engine);
+          } else {
+            reject(new Error("Unable to initialize PDF engine from secondary mirror."));
+          }
+        };
+        script.onerror = () => reject(new Error("Corporate network blocked CDN access for PDF.js."));
+        document.head.appendChild(script);
+      });
     }
 
-    // Render an ArrayBuffer of PDF data to the offscreen canvas
+    // Render ArrayBuffer to Offscreen Canvas
     async function renderPdfBuffer(pdfBuffer, displayName) {
       statusEl.innerText = `Rendering ${displayName}...`;
-      const pdfjs = getPdfLib();
-      const pdf = await pdfjs.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
+      const pdfEngine = await ensurePdfEngine();
+
+      const loadingTask = pdfEngine.getDocument({
+        data: new Uint8Array(pdfBuffer),
+        disableFontFace: true
+      });
+      
+      const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1);
 
       const viewport = page.getViewport({ scale: 2.5 });
@@ -117,13 +136,13 @@
       offscreenCanvas.width = viewport.width;
 
       const context = offscreenCanvas.getContext('2d');
-      await page.render({ canvasContext: context, viewport }).promise;
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
 
       fullImageBase64 = offscreenCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
       statusEl.innerText = `Ready: ${displayName}`;
     }
 
-    // Search for PDF in a zip
+    // Find PDF entry in archive
     function findPdfEntry(zipInstance) {
       const entries = Object.values(zipInstance.files).filter(f => !f.dir && !f.name.includes('__MACOSX'));
       
@@ -148,17 +167,17 @@
       try {
         const arrayBuffer = await file.arrayBuffer();
 
-        // 1. Direct PDF
+        // 1. Direct PDF Upload
         if (file.name.toLowerCase().endsWith('.pdf')) {
           await renderPdfBuffer(arrayBuffer, file.name);
           return;
         }
 
-        // 2. Zip archive
+        // 2. Zip Upload
         const zip = await JSZip.loadAsync(arrayBuffer);
         let pdfEntry = findPdfEntry(zip);
 
-        // 3. Nested zips inside the archive
+        // 3. Nested Zips
         if (!pdfEntry) {
           const innerZips = Object.values(zip.files).filter(f => !f.dir && f.name.toLowerCase().endsWith('.zip'));
           for (const z of innerZips) {
@@ -173,7 +192,7 @@
                 return;
               }
             } catch (innerErr) {
-              console.warn('Could not inspect inner zip:', z.name, innerErr);
+              console.warn('Inner zip inspection failed:', z.name, innerErr);
             }
           }
         }
@@ -184,7 +203,7 @@
             .map(f => f.name.split('/').pop().split('\\').pop());
 
           statusEl.innerText = 'No PDF found inside archive.';
-          alert(`No PDF drawing found inside "${file.name}".\n\nFiles detected:\n` + (names.length ? names.slice(0, 15).join('\n') : 'Archive empty.'));
+          alert(`No PDF drawing found inside "${file.name}".\n\nDetected files:\n` + (names.length ? names.slice(0, 15).join('\n') : 'Archive appears empty.'));
           return;
         }
 
@@ -193,7 +212,7 @@
         await renderPdfBuffer(pdfBytes, cleanName);
 
       } catch (err) {
-        console.error('File Read Error:', err);
+        console.error('File Error:', err);
         statusEl.innerText = 'Failed to load file.';
         alert(`Error opening "${file.name}":\n` + (err.message || err));
       }
@@ -217,22 +236,19 @@
 
       const prompt = `You are an expert PCB CAM engineer.
 Analyze this PCB fabrication drawing (FABRICATION NOTES, LAYER STACK TABLE, DRILL TABLE, and TITLE BLOCK).
-Extract the required parameters matching this exact list.
-For every parameter, provide its normalized bounding box [ymin, xmin, ymax, xmax] (scale 0-1000) pointing to where the evidence was located. If not stated, set "box_2d": null and "value": "No" or "No data".
 
-Format Rules:
-- "Core & Pre-preg": Format as "# of Cores: <X>   # of PP Sheets: <Y>"
-- "Cu Thickness": Format as "Inner: <val>   Outer: <val> Finish"
-- "Board Thickness": Format as "<in> Finished Board" or equivalent
-- "Board Thickness Tol.": Format as "Yes <tolerance>%" or "No data"
-- "Bow & Twist Tol.": Format as "Yes <tolerance>%" or "No data"
-- "Surface Finish": Format as "<Type> (e.g. ENIG, HASL Lead-Free)"
-- "DIM-Unit (in)": Format as "X - <val>   Y - <val>"
-- "Solder Mask Color": Must be optical color (e.g. Green, Black, White). Never use "Solder Resist".
-- "Hole Count": Total number of holes from drill chart
-- "Smallest Hole": Smallest finished drill diameter
+CRITICAL RULES:
+1. ZERO-HALLUCINATION DEFAULT:
+   - If a specification (such as CTI, impedance control, or specific tolerances) is NOT printed verbatim on the drawing, you MUST return "value": "NOT_SPECIFIED" and "box_2d": null.
+   - Do NOT assume standard industry values or infer unstated ratings.
 
-Return pure JSON array matching this exact template:
+2. CONTROLLED VOCABULARY:
+   - Surface Finish: Map "Tin/Lead" or "Sn/Pb" -> "HASL"; "Immersion Gold" or "Electroless Nickel Immersion Gold" -> "ENIG".
+   - Solder Mask Class: Map "Class 2" -> "Class - T"; "Class 3" -> "Class - H".
+   - Solder Mask Color: Must be optical color (e.g. Green, Black, White). If only "Solder Resist" is noted with no color, return "Non-Specific (EQV)".
+   - Hole Count: Extract total count from DRILL TABLE summary row or sum the tool quantities.
+
+Return pure JSON matching this exact template:
 [
   { "category": "Stackup", "label": "Part Type", "value": "PCB - 2 Layer", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Stackup", "label": "Material (1)", "value": "FR-4.0 170tg Undefined (EQV), IPC4101: 126, UL: V-0", "box_2d": [ymin, xmin, ymax, xmax] },
@@ -253,14 +269,14 @@ Return pure JSON array matching this exact template:
   { "category": "Dimensions and Panel", "label": "Multipanel", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Dimensions and Panel", "label": "Panel Profile", "value": "Routing", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Dimensions and Panel", "label": "Beveling", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "No data", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Dimensions and Panel", "label": "X-Out Allow (Yes)", "value": "NOT_SPECIFIED", "box_2d": null },
 
   { "category": "Circuit Design", "label": "Min. Trace / Space", "value": "Trace - 6.000   Space - 6.000 (mil)", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Circuit Design", "label": "Impedance Ctrl", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Circuit Design", "label": "BGA Design", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
 
   { "category": "Solder Mask and Marking", "label": "Silkscreen", "value": "White", "box_2d": [ymin, xmin, ymax, xmax] },
-  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black / Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
+  { "category": "Solder Mask and Marking", "label": "Solder Mask Color", "value": "Black", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Solder Mask and Marking", "label": "Solder Mask Finish", "value": "Non-Specific", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Solder Mask and Marking", "label": "Solder Mask Class", "value": "Class - T", "box_2d": [ymin, xmin, ymax, xmax] },
   { "category": "Solder Mask and Marking", "label": "Temp. Mask", "value": "No", "box_2d": [ymin, xmin, ymax, xmax] },
@@ -321,7 +337,7 @@ Return pure JSON array matching this exact template:
       document.getElementById('stepCounter').innerText = `Spec ${currentIndex + 1} of ${specList.length}`;
       document.getElementById('specCategory').innerText = item.category || 'SPEC';
       document.getElementById('specLabel').innerText = item.label;
-      document.getElementById('specValue').innerText = item.value;
+      document.getElementById('specValue').innerText = (item.value === "NOT_SPECIFIED" ? "Not Specified" : item.value);
 
       document.getElementById('prevBtn').disabled = (currentIndex === 0);
       document.getElementById('nextBtn').disabled = (currentIndex === specList.length - 1);
@@ -329,7 +345,7 @@ Return pure JSON array matching this exact template:
       renderCroppedSnippet(item.box_2d);
     }
 
-    // Clean Canvas Cropping (No Bounding Lines)
+    // Clean Canvas Cropping
     function renderCroppedSnippet(box) {
       const placeholder = document.getElementById('snippetPlaceholder');
       const canvasWrapper = document.getElementById('canvasWrapper');
